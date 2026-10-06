@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sbmlode"
 dynamic = ["version"]
-description = "sbmlode writes the ordinary differential equations of SBML models as python, julia and R code and as LaTeX, typst and markdown documents."
+description = "sbmlode writes the ordinary differential equations of SBML models as python, diffrax (JAX), julia and R code and as LaTeX, typst and markdown documents."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

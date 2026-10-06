@@ -6,7 +6,7 @@
 
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it
 
-- as **code** which simulates the model: **python** (numpy and scipy), **julia** (OrdinaryDiffEq.jl) and **R** (deSolve), verified against [libroadrunner](https://libroadrunner.org) over the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite);
+- as **code** which simulates the model: **python** (numpy and scipy), **diffrax** (python with JAX and diffrax, which `jax.jit` compiles, `jax.vmap` batches and `jax.grad` differentiates), **julia** (OrdinaryDiffEq.jl) and **R** (deSolve), verified against [libroadrunner](https://libroadrunner.org) over the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite);
 - as **documents** which describe the model: **typst**, **LaTeX** and **markdown**;
 - as **typed data** for an application which lays out the equations itself, such as [SBML4Humans](https://sbml4humans.de), see [Typed target](https://matthiaskoenig.github.io/sbmlode/typeset/).
 
@@ -17,6 +17,7 @@ sbmlode depends on [python-libsbml](https://sbml.org/software/libsbml/) and jinj
 ```bash
 pip install sbmlode               # the export
 pip install "sbmlode[simulate]"   # with numpy, pandas and scipy, which the python code runs with
+pip install "sbmlode[diffrax]"    # with jax and diffrax, which the diffrax code runs with
 ```
 
 ## Quick start

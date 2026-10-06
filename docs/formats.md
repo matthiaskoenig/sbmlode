@@ -1,8 +1,8 @@
 # Guide
 
-An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it in six formats:
+An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it in seven formats:
 
-- **numerical formats**, code which simulates the model: **python** (numpy and a `scipy.integrate` solver), **julia** (OrdinaryDiffEq.jl of DifferentialEquations.jl) and **R** (deSolve);
+- **numerical formats**, code which simulates the model: **python** (numpy and a `scipy.integrate` solver), **diffrax** (python with [JAX](https://docs.jax.dev) and [diffrax](https://docs.kidger.site/diffrax/), compiled with `jax.jit`, batched with `jax.vmap` and differentiated with `jax.grad`), **julia** (OrdinaryDiffEq.jl of DifferentialEquations.jl) and **R** (deSolve);
 - **presentation formats**, documents which describe the model: **typst**, **LaTeX** and **markdown**.
 
 The numerical code is correct, it reproduces [libroadrunner](https://libroadrunner.org) over the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite) (see [Verification](#verification)), and it is readable: the equations are written as the model states them, one per line with the name and unit of the variable as a comment. The three documents show the same content in the same order, so a model reads the same in each of them.
@@ -27,11 +27,12 @@ system.write("model.typ", standalone=False)  # with the options of the format
 
 `OdeSystem.from_sbml` takes the path of an SBML file, an SBML string or a `libsbml.SBMLDocument`, which is not changed. A model of the comp package is flattened first and a model of level 1 or 2 is read as level 3 version 2. The analysis raises a `ValueError` for a model which is not well defined, e.g. assignment rules whose dependencies form a cycle.
 
-`write` takes the format from the suffix of the file, or from its argument `fmt`, and returns the path:
+`write` takes the format from the suffix of the file, or from its argument `fmt`, and returns the path; the diffrax code shares the suffix `.py` with python and is written with `system.write("model.py", fmt="diffrax")`:
 
 | format | name | suffix | kind | options |
 | --- | --- | --- | --- | --- |
 | python | `python` | `.py` | code | `simulator` |
+| diffrax | `diffrax` | none, `fmt="diffrax"` | code | `simulator` |
 | julia | `julia` | `.jl` | code | `simulator` |
 | R | `r` | `.R`, `.r` | code | `simulator` |
 | typst | `typst` | `.typ` | document | `standalone`, `symbols` |
@@ -42,13 +43,13 @@ The options are passed as keyword arguments to `render` and `write`; an option t
 
 | option | default | effect |
 | --- | --- | --- |
-| `simulator` | `True` | python, julia, R: `True` writes a self contained simulator, `simulate(t_end)` included; `False` writes the right hand side, the initial values, the assigned values and the events only, for a solver of your own. |
+| `simulator` | `True` | python, diffrax, julia, R: `True` writes a self contained simulator, `simulate` included; `False` writes the right hand side, the initial values, the assigned values and the events only, for a solver of your own. |
 | `standalone` | `True` | typst, LaTeX, markdown: `True` writes a document which compiles on its own; `False` a fragment to include into a document of your own, see [Presentation formats](#presentation-formats). |
 | `symbols` | `"id"` | typst, LaTeX, markdown: `"id"` typesets every element with its id, `"name"` with its name if the name is a valid symbol, see [Symbols and names](#symbols-and-names). |
 
 `FORMATS` holds the formats by their name, each a `Format` with its template, suffixes, kind and options. The API is described in the [API reference](api.md).
 
-`scripts/docs_images.py` writes all six formats of the repressilator (BIOMD0000000012, a model of the tests in `tests/data/models/repressilator/`), compiles the typst document and simulates the model with the python code:
+`scripts/docs_images.py` writes all seven formats of the repressilator (BIOMD0000000012, a model of the tests in `tests/data/models/repressilator/`), compiles the typst document and simulates the model with the python code:
 
 ```bash
 uv run python -m scripts.docs_images docs/images/ode
@@ -101,7 +102,7 @@ The analysis resolves the following semantics once, so that every format only pr
 
 ## Numerical formats
 
-The python, julia and R code have the same structure. Python counts from 0, julia and R from 1; the code unpacks the vectors into named variables, so the equations never show an index.
+The python, diffrax, julia and R code have the same structure. Python and diffrax count from 0, julia and R from 1; the code unpacks the vectors into named variables, so the equations never show an index.
 
 1. A header with the id and name of the model, the file it was read from, the version of sbmlode, the units of the model and the table of the states.
 2. The ids of the states `XIDS`, the constants `PIDS` and the assigned values `YIDS`, one per line with name and unit as a comment, and their names and units in `NAMES` and `UNITS`.
@@ -109,18 +110,18 @@ The python, julia and R code have the same structure. Python counts from 0, juli
 4. `initial_values(p)`, which returns the initial states `x0` and the constants `p`, in which the constants set by an initial assignment are updated.
 5. The right hand side, which unpacks the states and the constants, evaluates the function definitions, the assignments and the rates of the reactions in their order and returns the rate of change of every state, one line per state. `f_y` returns the assigned values and the rates of the reactions.
 6. The events, see [Events](#events).
-7. `simulate(t_end)` (only `simulator=True`), which integrates the model from $t = 0$ to `t_end`, executes the events and returns a table of the time, the states and the assigned values at `points` time points (101 by default).
+7. `simulate(t_end)` (only `simulator=True`), which integrates the model from $t = 0$ to `t_end`, executes the events and returns a table of the time, the states and the assigned values at `points` time points (101 by default); `simulate(ts)` of diffrax takes the output times themselves and returns arrays.
 
 The arguments follow the convention of the solvers of each language:
 
-| | python | julia | R |
-| --- | --- | --- | --- |
-| initial values | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a list of `x0` and `p` |
-| right hand side | `f_dxdt(t, x, p)`, an array | `f!(dx, x, p, t)`, in place | `f_dxdt(t, x, p)`, `list(dx)` as deSolve wants it |
-| assigned values | `f_y(t, x, p)` | `f_y(x, p, t)` | `f_y(t, x, p)` |
-| simulation | `simulate(t_end)`, a pandas `DataFrame` | `simulate(t_end)`, a `DataFrame` of DataFrames.jl | `simulate(t_end)`, a `data.frame` |
-| solver | a `scipy.integrate` `OdeSolver`, `LSODA` by default | `Rodas5P()` of OrdinaryDiffEq | `deSolve::lsoda` |
-| dependencies | numpy, pandas, scipy | OrdinaryDiffEq, DataFrames, NaNMath (SpecialFunctions if the math uses `factorial`) | base R, deSolve for `simulate` |
+| | python | diffrax | julia | R |
+| --- | --- | --- | --- | --- |
+| initial values | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a list of `x0` and `p` |
+| right hand side | `f_dxdt(t, x, p)`, an array | `f_dxdt(t, x, p)`, an array of JAX, a vector field of diffrax | `f!(dx, x, p, t)`, in place | `f_dxdt(t, x, p)`, `list(dx)` as deSolve wants it |
+| assigned values | `f_y(t, x, p)` | `f_y(t, x, p)` | `f_y(x, p, t)` | `f_y(t, x, p)` |
+| simulation | `simulate(t_end)`, a pandas `DataFrame` | `simulate(ts)`, a `Simulation` of arrays, `to_frame` a pandas `DataFrame` | `simulate(t_end)`, a `DataFrame` of DataFrames.jl | `simulate(t_end)`, a `data.frame` |
+| solver | a `scipy.integrate` `OdeSolver`, `LSODA` by default | a solver of diffrax, `Kvaerno5()` by default | `Rodas5P()` of OrdinaryDiffEq | `deSolve::lsoda` |
+| dependencies | numpy, pandas, scipy | jax, diffrax, equinox, optimistix, pandas | OrdinaryDiffEq, DataFrames, NaNMath (SpecialFunctions if the math uses `factorial`) | base R, deSolve for `simulate` |
 
 `simulate` integrates with a relative tolerance of `1e-8` and an absolute tolerance of `1e-10` by default, with a largest step of the distance of two time points, and limits the number of steps of the solver: a model which grows without bound raises an error instead of running for ever. Every function evaluates the assignments it needs itself, so it can be read, and changed, on its own; the code has no classes, only constants and functions.
 
@@ -160,6 +161,79 @@ solution = scipy.integrate.solve_ivp(
 
     ```python
     --8<-- "images/ode/repressilator.py"
+    ```
+
+<!-- fmt: on -->
+
+### diffrax
+
+The diffrax code is python whose functions are functions of JAX: `jax.jit` compiles them, `jax.vmap` maps them over batches of constants and initial states, and `jax.grad` and `jax.jacfwd` differentiate them, a simulation with events included. It needs jax, diffrax, equinox, optimistix and pandas, which the `diffrax` extra installs (`pip install "sbmlode[diffrax]"`); sbmlode writes the code without them. The file switches JAX to float64 (`jax_enable_x64`) when it is imported, the precision which the tolerances of the integration need; the switch holds for the whole process.
+
+```python
+from sbmlode import OdeSystem
+
+OdeSystem.from_sbml("BIOMD0000000012_urn.xml").write("repressilator_diffrax.py", fmt="diffrax")
+```
+
+```python
+import diffrax
+import jax
+import jax.numpy as jnp
+from repressilator_diffrax import P0, simulate, to_frame
+
+ts = jnp.linspace(0.0, 1000.0, 201)
+simulation = simulate(ts)  # the output times t, the states x, the assigned values y, the constants p
+table = to_frame(simulation)  # a pandas DataFrame, outside of jax.jit
+
+# a simulation for each row of the constants
+ps = P0 * jnp.linspace(0.5, 1.5, 32)[:, None]
+xs = jax.vmap(lambda p: simulate(ts, p).x)(ps)
+
+
+# the derivative of a function of the simulation with respect to the constants
+def loss(p):
+    return jnp.sum(simulate(ts, p).x[-1] ** 2)
+
+
+gradient = jax.grad(loss)(P0)
+# forward mode, with the adjoint of diffrax for it
+jacobian = jax.jacfwd(lambda p: simulate(ts, p, adjoint=diffrax.ForwardMode()).x[-1])(P0)
+```
+
+`simulate(ts, p=None, x0=None, *, rtol=1e-8, atol=1e-10, solver=None, adjoint=None, max_step=None, max_steps=None)` integrates the model with `diffrax.diffeqsolve` from $t = 0$ to the last of the output times `ts`, which do not decrease, and returns a `Simulation`, a named tuple of the output times `t`, the states `x`, the assigned values `y` and the constants `p`, a row per output time. `equinox.filter_jit` compiles it for the number of output times and the options; the output times, the constants and the initial states are traced, so that a simulation with other values runs without a compilation. The solver is `diffrax.Kvaerno5()` by default, an implicit solver for stiff models, with a `diffrax.PIDController` of the tolerances and of the largest step, the distance of the output times; `diffrax.Tsit5()` is faster for a model which is not stiff. `adjoint` decides how the simulation is differentiated, as it does for `diffeqsolve`: `diffrax.RecursiveCheckpointAdjoint()`, the default, for reverse mode (`jax.grad`), `diffrax.ForwardMode()` for forward mode (`jax.jvp`, `jax.jacfwd`), `diffrax.DirectAdjoint()` for both, at a longer compilation. An error of a simulation, e.g. output times which decrease or more than `max_steps` steps, is raised from inside `jax.jit` as a `RuntimeError`, `equinox.EquinoxRuntimeError`.
+
+A model with events is integrated in segments, between the changes of the triggers and the executions of delayed events, by loops inside JAX (the loops of `equinox.internal` on which diffrax builds its adjoints, of the kind the adjoint differentiates), so that `jax.jit`, `jax.vmap` and `jax.grad` work with events as well: the derivative includes the shift of an event time with the constants. `simulate` takes in addition `max_segments` (100000), the most segments of the integration, and `max_pending` (100), the most executions scheduled at a time, which the fixed shapes of JAX need; beyond them it raises. The triggers are found at the ends of the steps of the solver, which are at most `max_step` long: a trigger which holds for a shorter time than a step can be stepped over, where the python code, which evaluates the triggers at 10 points of each step, finds it; a smaller `max_step` finds it.
+
+`piecewise` is `jnp.where`, which evaluates every piece: the value is exact, but a piece which does not apply and is singular at the point makes the derivative `NaN`, e.g. `piecewise(0, x == 0, 1 / x)` at `x = 0`, a known behavior of `jnp.where` under differentiation.
+
+With `simulator=False`, or for a solve of your own, `f_dxdt(t, x, p)` is a vector field of diffrax with the constants as its `args`:
+
+```python
+import diffrax
+import jax.numpy as jnp
+from repressilator_diffrax import f_dxdt, initial_values
+
+x0, p = initial_values()
+solution = diffrax.diffeqsolve(
+    diffrax.ODETerm(f_dxdt),
+    diffrax.Kvaerno5(),
+    t0=0.0,
+    t1=1000.0,
+    dt0=None,
+    y0=x0,
+    args=p,
+    saveat=diffrax.SaveAt(ts=jnp.linspace(0.0, 1000.0, 101)),
+    stepsize_controller=diffrax.PIDController(rtol=1e-8, atol=1e-10),
+    max_steps=100_000,  # diffrax stops after 4096 steps by default
+)
+```
+
+<!-- fmt: off -->
+
+??? example "`repressilator_diffrax.py`, the diffrax code of the repressilator"
+
+    ```python
+    --8<-- "images/ode/repressilator_diffrax.py"
     ```
 
 <!-- fmt: on -->
@@ -225,14 +299,14 @@ The strings of the code are ASCII only, a character which is not ASCII is writte
 
 ### Events
 
-Events are supported in full by the three languages, with the semantics of SBML and libroadrunner, and are written whether or not the code is a simulator. The functions of the events take the arguments of the right hand side, `(t, x, p)` in python and R and `(x, p, t)` in julia, and an assignment the values in addition, `(t, x, p, values)` in python and R and `(x, p, t, values)` in julia:
+Events are supported in full by the four formats of code, with the semantics of SBML and libroadrunner, and are written whether or not the code is a simulator. The functions of the events take the arguments of the right hand side, `(t, x, p)` in python, diffrax and R and `(x, p, t)` in julia, and an assignment the values in addition, `(t, x, p, values)` in python, diffrax and R and `(x, p, t, values)` in julia:
 
 - `event_triggers(t, x, p)` returns one continuous root function per event, whose sign is the truth value of its trigger: `a > b` is `a - b`, a conjunction the minimum and a disjunction the maximum of the root functions of its operands, a negation the negative. A solver ends its step where one of them changes its sign.
 - `event_conditions(t, x, p)` returns the exact truth value of every trigger, which tells a strict relation from a non-strict one at the root.
 - `event_values_<id>(t, x, p)` evaluates the values an event assigns, at the time of the trigger or of the execution as `useValuesFromTriggerTime` says, and `event_assign_<id>(t, x, p, values)` assigns them at the execution, with the conversion of a species in concentration whose compartment the event resizes; `event_sizes_<id>(t, x, p)` evaluates the sizes after the assignments for that conversion.
-- `EVENTS` lists every event with its flags `initial_value`, `persistent` and `use_trigger_values` and the functions of its delay, priority, values and assignments.
+- `EVENTS` lists every event with its flags `initial_value`, `persistent` and `use_trigger_values` and the functions of its delay, priority, values and assignments. The diffrax code, whose events are indexed inside JAX, holds the flags in the arrays `INITIAL_VALUE`, `PERSISTENT` and `USE_TRIGGER_VALUES` in the order of `EVENT_IDS` and selects the functions of an event by its index: `event_delay(k, t, x, p)`, `event_values(k, t, x, p)`, `event_assign(k, t, x, p, values)` and `event_priorities(t, x, p)`, the priorities of all events.
 
-`simulate` evaluates the triggers at $t = 0$ with their `initialValue`, executes the events whose trigger turns true, orders simultaneous events by their priority, schedules delayed events, drops a non-persistent event whose trigger turned false before its execution, evaluates the assigned values anew after every execution and restarts the integration. A cascade of more than 10000 executions at one time raises an error, as in libroadrunner. Python, julia and R share this algorithm, so the three simulations agree.
+`simulate` evaluates the triggers at $t = 0$ with their `initialValue`, executes the events whose trigger turns true, orders simultaneous events by their priority, schedules delayed events, drops a non-persistent event whose trigger turned false before its execution, evaluates the assigned values anew after every execution and restarts the integration. A cascade of more than 10000 executions at one time raises an error, as in libroadrunner. Python, diffrax, julia and R share this algorithm, so the four simulations agree; diffrax runs it inside JAX, on arrays of fixed shapes.
 
 ## Presentation formats
 
@@ -420,8 +494,8 @@ A curated subset of 67 cases, which covers every construct of SBML core, runs in
 `scripts/ode_report.py` runs the sweep, every case in a process of its own, and prints this table:
 
 ```bash
-uv run python scripts/ode_report.py                            # python
-uv run python scripts/ode_report.py --format julia --format r  # julia and R
+uv run python scripts/ode_report.py                                             # python
+uv run python scripts/ode_report.py --format diffrax --format julia --format r  # the others
 ```
 
 <div class="doc-rendered" markdown>

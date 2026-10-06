@@ -97,7 +97,7 @@ export SBMLODE_RSCRIPT="docker run --rm -v /tmp:/tmp sbmlode-r Rscript"
 
 ```bash
 uv run python scripts/ode_report.py
-uv run python scripts/ode_report.py --format julia --format r
+uv run python scripts/ode_report.py --format diffrax --format julia --format r
 ```
 
 ## Linting, formatting and type checking

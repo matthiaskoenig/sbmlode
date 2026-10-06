@@ -1,6 +1,6 @@
 # API reference
 
-The export of a model as its system of ordinary differential equations in python, julia, R, typst, LaTeX and markdown. The guide to it is the [Guide](formats.md), the typed data of an application is described in [Typed target](typeset.md).
+The export of a model as its system of ordinary differential equations in python, diffrax (python with JAX), julia, R, typst, LaTeX and markdown. The guide to it is the [Guide](formats.md), the typed data of an application is described in [Typed target](typeset.md).
 
 ::: sbmlode
 
