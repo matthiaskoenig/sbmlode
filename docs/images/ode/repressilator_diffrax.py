@@ -44,6 +44,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optimistix as optx
 import pandas as pd
 
 # float64, the precision of the SBML simulators, which the tolerances of the
@@ -316,6 +317,34 @@ class Simulation(NamedTuple):
     p: jax.Array  # the constants, a column per id of PIDS
 
 
+class Chord(diffrax.VeryChord):
+    """The chord method of an implicit solver, converged below `kappa`.
+
+    The iteration of a stage whose prediction is exact, e.g. of a rate which is
+    almost constant, is at the rounding errors from its first step on, and the ratio
+    of two of them is random: `diffrax.VeryChord` takes a ratio above 2 for a
+    divergence and rejects the step, under `jax.jit` every step. An increment below
+    `kappa` of the tolerances has converged, whatever the ratio. Newton's method of
+    optimistix is no remedy, it compares the residual with the absolute tolerance
+    alone, which the rounding errors of a large state exceed.
+    """
+
+    def terminate(self, fn, y, args, options, state, tags):
+        terminate, result = super().terminate(fn, y, args, options, state, tags)
+        successful = optx.RESULTS.successful
+        small = (state.diffsize < self.kappa) & (state.result == successful)
+        return terminate | small, optx.RESULTS.where(small, successful, result)
+
+
+def default_solver() -> diffrax.AbstractSolver:
+    """The solver of `simulate` by default: Kvaerno5, implicit for stiff models.
+
+    Its nonlinear equations are solved by `Chord` at the tolerances of the integration.
+    """
+    chord = diffrax.with_stepsize_controller_tols(Chord)()
+    return diffrax.Kvaerno5(root_finder=chord)
+
+
 # the limits of a simulation: the steps of an integration beyond those which the largest
 # step forces
 MAX_STEPS = 100000
@@ -346,8 +375,9 @@ def simulate(
         x0: the initial states, those of `initial_values` if not given
         rtol: the relative tolerance of the integration
         atol: the absolute tolerance of the integration
-        solver: the solver of diffrax, `diffrax.Kvaerno5()` if not given, an implicit
-            solver for stiff models; `diffrax.Tsit5()` for a model which is not stiff
+        solver: the solver of diffrax, `default_solver()` if not given, Kvaerno5, an
+            implicit solver for stiff models; `diffrax.Tsit5()` for a model which is
+            not stiff
         adjoint: the adjoint of diffrax, which decides how the simulation is
             differentiated: `diffrax.RecursiveCheckpointAdjoint()` if not given, for
             reverse mode (`jax.grad`), `diffrax.ForwardMode()` for forward mode
@@ -384,14 +414,18 @@ def simulate(
     ps = jnp.broadcast_to(p, (points, p.shape[0]))
     solution = diffrax.diffeqsolve(
         diffrax.ODETerm(f_dxdt),
-        diffrax.Kvaerno5() if solver is None else solver,
+        default_solver() if solver is None else solver,
         t0=0.0,
         t1=t_end,
         dt0=None,
         y0=x,
         args=p,
         saveat=diffrax.SaveAt(ts=ts),
-        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol, dtmax=max_step),
+        # the steps end at the output times, whose values are those of the solver,
+        # not of its interpolation, whose order is lower (3 for Kvaerno5)
+        stepsize_controller=diffrax.PIDController(
+            rtol=rtol, atol=atol, dtmax=max_step, step_ts=ts
+        ),
         adjoint=diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint,
         max_steps=max_steps,
     )

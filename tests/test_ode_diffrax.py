@@ -217,6 +217,50 @@ def test_diffrax_solver(tmp_path: Path) -> None:
     assert np.allclose(explicit.x, default.x, rtol=1e-6, atol=1e-9)
 
 
+def test_diffrax_output_times_are_steps(tmp_path: Path) -> None:
+    """The values at the output times are those of the solver, not interpolated.
+
+    The rate of a reversible reaction near its equilibrium is the difference of two
+    terms of almost the same value, which the interpolation of Kvaerno5, of order 3,
+    misses by more than the tolerance (case 00814 of the SBML test suite).
+    """
+    sbml = model_sbml("""
+        compartment C = 0.95
+        species S1 in C = 1 / 0.95; species S2 in C = 0.5 / 0.95; species S3 in C = 0
+        kf = 2.5; kr = 0.2
+        J1: S1 -> S2 + S3; (kf * S1 - kr * S2 * S3) * C
+    """)
+    module = diffrax_module(OdeSystem.from_sbml(sbml), tmp_path / "model.py")
+    assert_diffrax_trajectory_as_roadrunner(sbml, module)
+
+
+def test_diffrax_nearly_constant_rate(tmp_path: Path) -> None:
+    """A rate which is almost constant integrates under `jax.jit` at tight tolerances.
+
+    The chord method of diffrax takes the ratio of the rounding errors of its
+    iteration for a divergence and rejects every step; `Chord` of `default_solver`
+    ends at an increment below `kappa` (case 01179 of the SBML test suite).
+    """
+    sbml = model_sbml("""
+        timeconv = 60; paramconv = 0.01
+        t1 = 1; t1' = (time / timeconv / (t1 / paramconv) + 3) * paramconv / timeconv
+    """)
+    module = diffrax_module(OdeSystem.from_sbml(sbml), tmp_path / "model.py")
+    assert_diffrax_trajectory_as_roadrunner(sbml, module)
+
+
+def test_diffrax_large_state(tmp_path: Path) -> None:
+    """A state which grows to 4e5 integrates at tight tolerances.
+
+    The rounding errors of the nonlinear equations of Kvaerno5 exceed the absolute
+    tolerance, which Newton's method of optimistix compares its residual with alone;
+    `Chord` scales its increments with the state (case 00918 of the SBML test suite).
+    """
+    sbml = model_sbml("c = 1.5; c' = 1.25 * c")
+    module = diffrax_module(OdeSystem.from_sbml(sbml), tmp_path / "model.py")
+    assert_diffrax_trajectory_as_roadrunner(sbml, module)
+
+
 # --- the contract of JAX --------------------------------------------------------------
 
 
@@ -523,6 +567,18 @@ def test_diffrax_max_pending(tmp_path: Path) -> None:
     assert module.simulate(ts).x.shape == (101, 0)
     with pytest.raises(RuntimeError, match="max_pending"):
         module.simulate(ts, max_pending=4)
+
+
+def test_diffrax_many_events_at_once(tmp_path: Path) -> None:
+    """`max_pending` grows with the number of events, which can trigger at once.
+
+    120 events trigger at t = 1.5, more than the 100 executions of the default of a
+    model with few events (case 01533 of the SBML test suite).
+    """
+    events = "; ".join(f"E{k}: at time > 1.5: P{k} = 2" for k in range(120))
+    parameters = "; ".join(f"P{k} = 1" for k in range(120))
+    df = _assert_events_as_roadrunner(f"{parameters}; {events}", tmp_path)
+    assert (df.iloc[-1, 1:] == 2.0).all()
 
 
 def test_diffrax_max_segments(tmp_path: Path) -> None:

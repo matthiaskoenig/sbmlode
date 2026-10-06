@@ -187,6 +187,7 @@ _GENERATED: dict[str, set[str]] = {
         "terminate", "postprocess", "fn", "options", "f_struct", "aux_struct", "tags",
         "lower", "upper", "lower_value", "upper_value", "increasing", "middle",
         "value", "aux", "before", "small", "result", "t_start", "t_first",
+        "default_solver", "Chord", "chord", "super", "successful",
     },
     # the names of `resources/converters/ode/julia.jl.jinja`: the packages, the
     # names it imports, its functions, their arguments and locals
