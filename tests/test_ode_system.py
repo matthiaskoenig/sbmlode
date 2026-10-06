@@ -1,6 +1,7 @@
 """Test the analysis of an SBML model into its ODE system."""
 
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1085,3 +1086,99 @@ def test_unit_of_species_in_concentration(
 
     sbml = edit_sbml(model_sbml("c = 1; S in c = 1; S -> ; 1"), units)
     assert OdeSystem.from_sbml(sbml).symbol("S").unit == expected
+
+
+# --- the rates of the sizes: review findings ------------------------------------------
+
+
+def test_rateof_of_an_assigned_size_in_an_initial_assignment() -> None:
+    """A rate of a size an initial assignment alone uses is part of the system."""
+    sbml = edit_sbml(
+        model_sbml("compartment V; V := 1 + time; p0 = 0"),
+        lambda m: _add_initial(m, "p0", "rateOf(V)"),
+    )
+    system = OdeSystem.from_sbml(sbml)
+    assert [r.compartment for r in system.size_rates] == ["V"]
+    assert math_of(system.initial)["dV_dt"] == ("1", "size_rate")
+    assert math_of(system.initial)["p0"] == ("dV_dt", "initial_assignment")
+    system.render("python")
+
+
+def test_size_rule_with_the_rate_of_a_diluted_species() -> None:
+    """A size rule which uses the rate of a diluted species has no derivative.
+
+    The rate of the species holds the rate of another size, whose own rate (a second
+    derivative) is unknown: the size is unsupported, the analysis does not fail.
+    """
+    system = system_of("""
+        compartment V2 = 1; V2' = 0.1; species S in V2 = 1; J0: S -> ; k*S; k = 0.1
+        compartment V1; q := rateOf(S); V1 := 1 + q; species T in V1 = 1
+    """)
+    assert ("rate of an assigned size", "V1") in system.unsupported
+
+
+def test_continuous_is_linear_in_the_rules() -> None:
+    """The check of a continuous size visits every rule once, not every path.
+
+    The rules `p_k = p_(k-1) + p_(k-2)` of constants have exponentially many paths;
+    the model is built with libsbml, antimony validates such a chain exponentially.
+    """
+
+    def chain(model: libsbml.Model) -> None:
+        for k in range(2, 80):
+            parameter: libsbml.Parameter = model.createParameter()
+            parameter.setId(f"p{k}")
+            parameter.setConstant(False)
+            rule: libsbml.AssignmentRule = model.createAssignmentRule()
+            rule.setVariable(f"p{k}")
+            rule.setMath(libsbml.parseL3Formula(f"p{k - 1} + p{k - 2}"))
+        model.getAssignmentRule("V").setMath(libsbml.parseL3Formula("p79"))
+
+    sbml = edit_sbml(
+        model_sbml("p0 = 1; p1 = 1; compartment V; V := p1; species $B in V = 1"), chain
+    )
+    start = time.perf_counter()
+    system = OdeSystem.from_sbml(sbml)
+    assert time.perf_counter() - start < 2.0
+    assert system.size_rates == ()
+
+
+def test_size_without_derivative_gives_its_species_no_ode() -> None:
+    """The species of a size whose rule has no derivative have no ODE (the spec)."""
+    system = system_of("""
+        compartment V = 2; V := 1 + rem(time, 2); species S in V = 1
+        J0: S -> ; k*S; k = 0.1
+    """)
+    assert ("rate of an assigned size", "V") in system.unsupported
+    assert "S" not in system.states
+    document = system.render("latex")
+    assert "dV_dt" not in document
+    assert r"\frac{\mathrm{d} V}{\mathrm{d} t}" not in document
+
+
+def test_local_parameter_does_not_make_a_size_continuous() -> None:
+    """A local parameter of a reaction is not the global id it shadows."""
+
+    def local_k(model: libsbml.Model) -> None:
+        law: libsbml.KineticLaw = model.getReaction("J").getKineticLaw()
+        parameter: libsbml.LocalParameter = law.createLocalParameter()
+        parameter.setId("k")
+        parameter.setValue(2.0)
+
+    sbml = edit_sbml(
+        model_sbml("""
+            k = 1; k' = 0.1; compartment c = 1; species S in c = 1
+            J: S -> ; k; compartment W; W := 1 + J; species $T in W = 1
+        """),
+        local_k,
+    )
+    system = OdeSystem.from_sbml(sbml)
+    assert system.size_rates == ()
+    assert "T" not in system.states
+
+
+def _add_initial(model: libsbml.Model, symbol: str, formula_text: str) -> None:
+    """Add an initial assignment of a formula."""
+    assignment: libsbml.InitialAssignment = model.createInitialAssignment()
+    assignment.setSymbol(symbol)
+    assignment.setMath(libsbml.parseL3Formula(formula_text))

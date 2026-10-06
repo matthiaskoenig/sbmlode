@@ -276,9 +276,8 @@ class _Analysis:
         self.quantities: dict[str, Quantity] = {}
         self.reaction_ids: set[str] = set()
         self.reaction_rates: dict[str, libsbml.ASTNode] = {}
-        self.reaction_ids_read: set[str] = {
-            reaction.getId() for reaction in self.model.getListOfReactions()
-        }
+        # the rates of the reactions as read, the local parameters renamed
+        self.reaction_laws: dict[str, libsbml.ASTNode] = {}
         self.diluted: set[str] = set()
         self.reacting: set[str] = set()
         self.continuous: dict[str, bool] = {}
@@ -431,7 +430,12 @@ class _Analysis:
             sid: self._resolve(ast, sid) for sid, ast in self.assignment_rules.items()
         }
         events = self._read_events()
+        initial = [a for q in quantities if (a := self._initial_of(q)) is not None]
+        # every math is resolved, which creates the rates of the sizes it uses
         size_rates = self._build_size_rates()
+        # a species diluted by a rate which is unknown has no ODE
+        unknown = {r.symbol.sid for r in size_rates if r.math is None}
+        odes = [ode for ode in odes if ode.size_rate not in unknown]
         return OdeSystem(
             info=self._read_info(),
             compartments=tuple(compartments),
@@ -441,7 +445,7 @@ class _Analysis:
             functions=tuple(functions),
             size_rates=size_rates,
             assignments=self._build_assignments(size_rates, rules, reactions),
-            initial=self._build_initial(quantities, reactions, size_rates),
+            initial=self._build_initial(initial, reactions, size_rates),
             reactions=tuple(reactions),
             odes=tuple(odes),
             events=tuple(events),
@@ -605,6 +609,7 @@ class _Analysis:
         """
         reacting = {p.species for r in reactions for p in (*r.reactants, *r.products)}
         self.reacting = reacting
+        self.reaction_laws = {r.symbol.sid: r.rate for r in reactions}
         species_list: list[Quantity] = []
         species: libsbml.Species
         for species in self.model.getListOfSpecies():
@@ -780,47 +785,60 @@ class _Analysis:
 
     # --- the rates of the sizes ----------------------------------------------------
 
-    def _continuous(self, sid: str, stack: frozenset[str] = frozenset()) -> bool:
+    def _continuous(self, sid: str) -> bool:
         """Check that a variable changes continuously in time.
 
         A variable with a rate rule, a species which is a state by its reactions, a
         species in concentration in a compartment which changes continuously, and a
-        variable with an assignment rule which uses the time or one of these,
-        through other assignment rules and reaction rates. A size with an assignment
-        rule of constants only, e.g. `V = BW * f`, is constant between the events.
+        variable with an assignment rule or a reaction rate which uses the time or
+        one of these, through other assignment rules and reaction rates. A size with
+        an assignment rule of constants only, e.g. `V = BW * f`, is constant between
+        the events.
+        """
+        return self._continuity(sid, frozenset())[0]
+
+    def _continuity(self, sid: str, stack: frozenset[str]) -> tuple[bool, bool]:
+        """Whether a variable changes continuously, and whether a cycle was cut.
+
+        A result is cached unless it is false because a cycle was cut short, which
+        another path may decide; so every variable is visited once, see
+        `_continuous`.
         """
         if sid in self.continuous:
-            return self.continuous[sid]
+            return self.continuous[sid], False
         if sid in stack:
-            return False
+            return False, True
         stack = stack | {sid}
-        result = False
+        result, cut = False, False
+        math = self.assignment_rules.get(sid) or self.reaction_laws.get(sid)
         species: libsbml.Species | None = self.model.getSpecies(sid)
-        math = self.assignment_rules.get(sid)
         if sid in self.rate_rules:
             result = True
-        elif math is not None or sid in self.reaction_ids_read:
-            if math is None:
-                law = self.model.getReaction(sid).getKineticLaw()
-                math = law.getMath() if law is not None and law.isSetMath() else None
-            if math is not None:
-                result = any(
-                    n.getType() == libsbml.AST_NAME_TIME for n in walk(math)
-                ) or any(self._continuous(d, stack) for d in names(math))
+        elif math is not None:
+            if any(n.getType() == libsbml.AST_NAME_TIME for n in walk(math)):
+                result = True
+            else:
+                for dependency in sorted(names(math)):
+                    found, cut_short = self._continuity(dependency, stack)
+                    cut = cut or cut_short
+                    if found:
+                        result = True
+                        break
         elif species is not None:
             result = (
                 sid in self.reacting
                 and not species.getBoundaryCondition()
                 and not species.getConstant()
-            ) or (
-                not species.getHasOnlySubstanceUnits()
-                and bool(species.getCompartment())
-                and self._continuous(species.getCompartment(), stack)
             )
-        # a result found without a cycle cut short is final
-        if result or len(stack) == 1:
+            if (
+                not result
+                and not species.getHasOnlySubstanceUnits()
+                and species.getCompartment()
+            ):
+                result, cut = self._continuity(species.getCompartment(), stack)
+        if result or not cut:
             self.continuous[sid] = result
-        return result
+        return result, cut and not result
 
     def _size_rate(self, cid: str) -> str | None:
         """The id of the rate of the size of a compartment, created once.
@@ -850,23 +868,28 @@ class _Analysis:
         The rate of a size with a rate rule is the right hand side of the rule, of a
         size with an assignment rule the derivative of the rule (`_total_rate`); a
         rule which cannot be differentiated, or whose derivative depends on the rate
-        itself (the size depends on a species in it), is unsupported.
+        itself (the size depends on a species in it), is unsupported. A derivative
+        may use the rate of another size, which is built as well, until every rate
+        is built.
         """
-        size_rates = []
-        for cid in [c.getId() for c in self.model.getListOfCompartments()]:
-            symbol = self.size_rates.get(cid)
-            if symbol is None:
-                continue
-            if cid in self.rate_rules:
-                math: libsbml.ASTNode | None = self._resolved_rate(cid, cid)
-            else:
-                math = self._total_rate(cid, cid, frozenset())
-                if math is not None and symbol.sid in names(math):
-                    math = None
-                if math is None:
-                    self._unsupported("rate of an assigned size", cid)
-            size_rates.append(SizeRate(symbol, cid, math))
-        return tuple(size_rates)
+        maths: dict[str, libsbml.ASTNode | None] = {}
+        while pending := [cid for cid in self.size_rates if cid not in maths]:
+            for cid in pending:
+                symbol = self.size_rates[cid]
+                if cid in self.rate_rules:
+                    math: libsbml.ASTNode | None = self._resolved_rate(cid, cid)
+                else:
+                    math = self._total_rate(cid, cid, frozenset())
+                    if math is not None and symbol.sid in names(math):
+                        math = None
+                    if math is None:
+                        self._unsupported("rate of an assigned size", cid)
+                maths[cid] = math
+        return tuple(
+            SizeRate(self.size_rates[cid], cid, maths[cid])
+            for cid in (c.getId() for c in self.model.getListOfCompartments())
+            if cid in maths
+        )
 
     def _total_rate(
         self, sid: str, element: str, stack: frozenset[str]
@@ -887,6 +910,9 @@ class _Analysis:
             )
         if sid in self.rhs:
             return self._resolved_rate(sid, element, stack)
+        if any(symbol.sid == sid for symbol in self.size_rates.values()):
+            # the rate of a rate of a size, a second derivative, is unknown
+            return None
         if sid in self.assignment_rules:
             math = self._resolve(self.assignment_rules[sid], element, stack)
         elif sid in self.reaction_rates:
@@ -966,7 +992,7 @@ class _Analysis:
 
     def _build_initial(
         self,
-        quantities: list[Quantity],
+        initial: list[Assignment],
         reactions: list[Reaction],
         size_rates: tuple[SizeRate, ...],
     ) -> tuple[Assignment, ...]:
@@ -974,8 +1000,12 @@ class _Analysis:
 
         The rates are the reaction rates and the rates of the sizes, e.g. of a
         `rateOf` of a size in an initial assignment.
+
+        Args:
+            initial: the initial value of each quantity which is computed at t=0
+            reactions: the reactions
+            size_rates: the rates of the sizes
         """
-        initial = [a for q in quantities if (a := self._initial_of(q)) is not None]
         rates: dict[str, tuple[libsbml.ASTNode, Origin]] = {
             r.symbol.sid: (r.rate, "reaction") for r in reactions
         }
