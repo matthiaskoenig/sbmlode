@@ -141,4 +141,4 @@ A release is made from `develop`:
 
     This starts the `CI-CD` workflow, which runs the tests, builds the distributions (`build`), publishes them to [PyPI](https://pypi.org/project/sbmlode/) by trusted publishing (`publish`), creates the GitHub release (`github-release`) and fast-forwards `main` (`sync-main`). A tag cannot be moved or deleted afterwards.
 
-6. once Zenodo has archived the release, update `date-released` and the DOI in `CITATION.cff` through a pull request
+6. once Zenodo has archived the release, cite it through a pull request: the version DOI (listed by `https://zenodo.org/api/records?q=conceptrecid:23179199&all_versions=true&sort=mostrecent`) and `date-released` in `CITATION.cff`, and the version, the month and the DOI of the citation in `README.md` and `docs/index.md`

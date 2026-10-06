@@ -1,6 +1,6 @@
 # sbmlode
 
-[![PyPI](https://img.shields.io/pypi/v/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![CI-CD](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml) [![Documentation](https://img.shields.io/badge/docs-zensical-teal)](https://matthiaskoenig.github.io/sbmlode/)
+[![PyPI](https://img.shields.io/pypi/v/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![CI-CD](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml) [![Documentation](https://img.shields.io/badge/docs-zensical-teal)](https://matthiaskoenig.github.io/sbmlode/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
 
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it
 
@@ -30,6 +30,27 @@ system.write("model.md", standalone=False)  # with the options of the format
 ```
 
 The [Guide](https://matthiaskoenig.github.io/sbmlode/formats/) describes the formats, their options, the supported SBML and the verification, the [API reference](https://matthiaskoenig.github.io/sbmlode/api/) the classes and functions.
+
+## How to cite
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
+
+If you use sbmlode please cite the archived software on [Zenodo](https://doi.org/10.5281/zenodo.23179199):
+
+> König, M. (2026). *sbmlode: ordinary differential equations of SBML models* (Version 0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23179200
+
+```bibtex
+@software{koenig_sbmlode,
+  author    = {König, Matthias},
+  title     = {sbmlode: ordinary differential equations of SBML models},
+  year      = {2026},
+  month     = oct,
+  version   = {0.1.0},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.23179200},
+  url       = {https://doi.org/10.5281/zenodo.23179200},
+}
+```
 
 ## License
 
