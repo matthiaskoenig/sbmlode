@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from resources import REPRESSILATOR_SBML
 
-from scripts.docs_images import SUFFIXES, compile_typst, export
+from scripts.docs_images import ENDINGS, compile_typst, export
 
 DOCS_DIR: Path = Path(__file__).parents[3] / "docs" / "images" / "ode"
 """The files of the ODE export in the documentation."""
@@ -42,7 +42,7 @@ def exported(tmp_path_factory: pytest.TempPathFactory) -> list[Path]:
 def test_every_format_is_shown(exported: list[Path]) -> None:
     """The example writes one file per format and the markdown fragment."""
     assert [p.name for p in exported] == [
-        *(f"repressilator{suffix}" for suffix in SUFFIXES.values()),
+        *(f"repressilator{ending}" for ending in ENDINGS.values()),
         "repressilator_fragment.md",
     ]
 
@@ -50,7 +50,7 @@ def test_every_format_is_shown(exported: list[Path]) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        *(f"repressilator{suffix}" for suffix in SUFFIXES.values()),
+        *(f"repressilator{ending}" for ending in ENDINGS.values()),
         "repressilator_fragment.md",
     ],
 )

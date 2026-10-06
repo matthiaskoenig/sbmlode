@@ -1,6 +1,6 @@
 """The ODE system of the model BIOMD0000000012: Elowitz2000 - Repressilator.
 
-Written by sbmlode 0.1.0 from BIOMD0000000012_urn.xml, SBML L2V3.
+Written by sbmlode 0.2.0 from BIOMD0000000012_urn.xml, SBML L2V3.
 
 Units of the model:
 

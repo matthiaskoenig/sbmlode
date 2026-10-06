@@ -1,0 +1,1036 @@
+{#- The diffrax code of an ODE system, see `sbmlode.formats` for the context. -#}
+{% macro comment(text) %}{% if text %}  # {{ text }}{% endif %}{% endmacro %}
+{% macro body(scope) %}
+{% if scope.time %}
+    t = jnp.asarray(t, dtype=float)  # an array: math out of its domain is nan, no error
+{% endif %}
+{% if scope.states %}
+    # states
+{% for x in scope.states %}
+    {{ x.code }} = x[{{ x.index }}]{{ comment(x.comment) }}
+{% endfor %}
+{% endif %}
+{% if scope.constants %}
+    # constants
+{% for c in scope.constants %}
+    {{ c.code }} = p[{{ c.index }}]{{ comment(c.comment) }}
+{% endfor %}
+{% endif %}
+{% if scope.assignments %}
+    # assigned values and reaction rates
+{% for a in scope.assignments %}
+    {{ a.code }} = {{ a.expr }}{{ comment(a.comment) }}
+{% endfor %}
+{% endif %}
+{% endmacro %}
+"""The ODE system of the model {{ model.id | docstring if model.id else "without id" }}{% if model.name and model.name != model.id %}: {{ model.name | docstring }}{% endif %}.
+
+Written by sbmlode {{ model.sbmlode }}{% if model.source %} from {{ model.source | docstring }}{% endif %}, SBML L{{ model.level }}V{{ model.version }}.
+{% set units = [] %}
+{% for key, unit in model.units.items() if unit %}
+{% set _ = units.append([key, unit]) %}
+{% endfor %}
+{% if units %}
+
+Units of the model:
+
+{{ table(units, 4, docstring) }}
+{% endif %}
+{% if states %}
+
+States x:
+
+{{ table([["", "id", "name", "unit"]] + rows(states, "index", "id", "name", "unit"), 4, docstring) }}
+{% endif %}
+
+`initial_values(p)` returns the initial states x0 and the constants p at t = 0,
+`f_dxdt(t, x, p)` the rates of change of the states and `f_y(t, x, p)` the assigned
+values y, the rules and the reaction rates. They are functions of JAX: `jax.jit`
+compiles them, `jax.vmap` maps them over arrays and `jax.grad` differentiates them.
+{% if events %}
+`EVENT_IDS` lists the events, `event_triggers(t, x, p)` and `event_conditions(t, x, p)`
+their triggers, `event_delay`, `event_priorities`, `event_values` and `event_assign`
+the functions of their delays, priorities and assignments.
+{% endif %}
+{% if options.simulator %}
+`simulate(ts)` integrates the model with diffrax{{ " and executes its events" if events }}, it
+returns the states, the assigned values and the constants at the output times ts,
+`to_frame` a table of them, the file run as a script prints the head of a simulation:
+
+    ts = jnp.linspace(0.0, 10.0, 101)
+    simulation = simulate(ts)
+    # a simulation for each row of the constants ps
+    xs = jax.vmap(lambda p: simulate(ts, p).x)(ps)
+    # the gradient of a function of the simulation with respect to the constants
+    gradient = jax.grad(lambda p: jnp.sum(simulate(ts, p).x ** 2))(P0)
+{% endif %}
+"""
+
+{% if options.simulator %}
+from typing import {{ "ClassVar, " if events }}NamedTuple
+
+import diffrax
+import equinox as eqx
+{% if events %}
+import equinox.internal as eqxi
+{% endif %}
+{% endif %}
+import jax
+import jax.numpy as jnp
+{% if options.simulator %}
+import numpy as np
+{% if events or states %}
+import optimistix as optx
+{% endif %}
+import pandas as pd
+{% endif %}
+
+# float64, the precision of the SBML simulators, which the tolerances of the
+# integration need, before the first array; a switch of the process which imports
+# this file
+jax.config.update("jax_enable_x64", True)
+
+# the ids of the states x, the constants p and the assigned values y
+XIDS = [{% if states %}
+
+{% for x in states %}
+    "{{ x.id }}",{{ comment(x.comment) }}
+{% endfor %}
+{% endif %}]
+PIDS = [{% if constants %}
+
+{% for c in constants %}
+    "{{ c.id }}",{{ comment(c.comment) }}
+{% endfor %}
+{% endif %}]
+YIDS = [{% if assigned %}
+
+{% for y in assigned %}
+    "{{ y.id }}",{{ comment(y.comment) }}
+{% endfor %}
+{% endif %}]
+
+# the names and the units of the ids
+NAMES = {{ "{" }}{% if states or constants or assigned %}
+
+{% for v in states + constants + assigned %}
+    "{{ v.id }}": {{ v.name | python_string }},
+{% endfor %}
+{% endif %}{{ "}" }}
+UNITS = {{ "{" }}{% if states or constants or assigned %}
+
+{% for v in states + constants + assigned %}
+    "{{ v.id }}": {{ v.unit | python_string }},
+{% endfor %}
+{% endif %}{{ "}" }}
+
+# the default values of the constants, `jnp.nan` for one without a value, e.g. one
+# which an initial assignment sets and `initial_values` computes
+P0 = jnp.array([{% if constants %}
+
+{% for c in constants %}
+    {{ c.value if c.value is not none else "jnp.nan" }},  # {{ c.id }}
+{% endfor %}
+{% endif %}], dtype=float)
+{% for f in functions %}
+
+
+def {{ f.code }}({{ f.arguments | join(", ") }}):
+{% if f.name %}
+    """{{ f.name | docstring }}."""
+{% endif %}
+    return {{ f.body }}
+{% endfor %}
+
+
+def initial_values(p: jax.Array | None = None) -> tuple[jax.Array, jax.Array]:
+    """The initial states x0 and the constants p at t = 0.
+
+    The initial values, initial assignments and the rules they need are evaluated
+    in the order of their dependencies.
+{% if scopes.initial.computed %}
+
+    These constants are computed, a value passed for them is replaced:
+
+{% set computed = [] %}
+{% for c in scopes.initial.computed %}
+{% set origin = "initial assignment" if c.origin == "initial_assignment" else "converted with its compartment" %}
+{% set _ = computed.append(["p[%d]" % c.index, c.id, origin]) %}
+{% endfor %}
+{{ table(computed, 8, docstring) }}
+{% else %}
+
+    Every constant keeps the value passed.
+{% endif %}
+
+    Args:
+        p: the constants, `P0` if not given
+
+    Returns:
+        the initial states x0 and the constants p, a new array
+    """
+    p = P0 if p is None else jnp.asarray(p, dtype=float)
+{% set scope = scopes.initial %}
+{% if scope.time %}
+    t = jnp.asarray(0.0)  # the initial time
+{% endif %}
+{% if scope.constants %}
+    # constants
+{% for c in scope.constants %}
+    {{ c.code }} = p[{{ c.index }}]{{ comment(c.comment) }}
+{% endfor %}
+{% endif %}
+{% if scope.assignments %}
+    # initial values
+{% for a in scope.assignments %}
+    {{ a.code }} = {{ a.expr }}{{ comment(a.comment) }}
+{% endfor %}
+{% endif %}
+{% if scope.computed %}
+    # the constants set by the initial values
+{% for c in scope.computed %}
+    p = p.at[{{ c.index }}].set({{ c.code }})
+{% endfor %}
+{% endif %}
+    x0 = jnp.array({{ wrapped(states | map(attribute="code") | list, 4, 19, 14) }}, dtype=float)
+    return x0, p
+
+
+def f_dxdt(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The rates of change dx/dt of the states x at the time t.
+
+    The arguments are in the order of a vector field of diffrax, `diffrax.ODETerm`
+    takes the function with the constants p as its `args`.
+    """
+{% set lines = body(scopes.dxdt) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+{% if odes %}
+    # rates of change
+    return jnp.array([
+{% for ode in odes %}
+        {{ ode.expr }},  # d{{ ode.id }}/dt
+{% endfor %}
+    ], dtype=float)
+{% else %}
+    return jnp.array([], dtype=float)
+{% endif %}
+
+
+def f_y(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The assigned values y at the time t, the rules and the reaction rates."""
+{% set lines = body(scopes.y) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.array({{ wrapped(assigned | map(attribute="code") | list, 4, 21, 14) }}, dtype=float)
+{% if events %}
+{% set width = events | map(attribute="assignments") | map("length") | max %}
+
+
+def event_triggers(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The root function of the trigger of each event, positive where it holds.
+
+    An integrator locates the time at which a trigger changes as a root of its
+    function. At a root, where the function is 0, the trigger itself decides, see
+    `event_conditions`: `a >= b` holds at `a == b`, `a > b` does not.
+    """
+{% set lines = body(scopes.roots) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.array([
+{% for e in events %}
+        {{ e.root }},  # {{ e.id }}{% if e.comment %} {{ e.comment }}{% endif %}
+
+{% endfor %}
+    ], dtype=float)
+
+
+def event_conditions(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """Whether the trigger of each event holds."""
+{% set lines = body(scopes.triggers) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.array([
+{% for e in events %}
+        {{ e.trigger }},  # {{ e.id }}{% if e.comment %} {{ e.comment }}{% endif %}
+
+{% endfor %}
+    ], dtype=bool)
+{% for e in events %}
+{% if e.delay is not none %}
+
+
+def {{ e.functions.delay }}(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The delay of the event {{ e.id }}, evaluated when its trigger turns true."""
+{% set lines = body(e.scopes.delay) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.asarray({{ e.delay }}, dtype=float)
+{% endif %}
+{% if e.priority is not none %}
+
+
+def {{ e.functions.priority }}(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The priority of the event {{ e.id }}, evaluated before each execution."""
+{% set lines = body(e.scopes.priority) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.asarray({{ e.priority }}, dtype=float)
+{% endif %}
+
+
+def {{ e.functions["values"] }}(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The values the event {{ e.id }} assigns, evaluated {{ "when its trigger turns true" if e.use_trigger_values else "at its execution" }}."""
+{% set lines = body(e.scopes["values"]) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.array([
+{% for a in e.assignments %}
+{% if a.expr is none %}
+        jnp.nan,  # {{ a.id }}: not assigned, its amount is kept
+{% else %}
+        {{ a.expr }},  # {{ a.id }}{% if a.comment %} {{ a.comment }}{% endif %}
+
+{% endif %}
+{% endfor %}
+    ], dtype=float)
+
+
+{% if e.functions.sizes %}
+def {{ e.functions.sizes }}(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The sizes of the compartments the event {{ e.id }} changes, after its assignments."""
+{% set lines = body(e.scopes.sizes) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return jnp.array([{% for c in e.sizes %}{{ c.code }}{{ ", " if not loop.last }}{% endfor %}], dtype=float)
+
+
+{% endif %}
+def {{ e.functions.assign }}(
+    t: jax.Array, x: jax.Array, p: jax.Array, values: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+{% if e.assignments | selectattr("scale") | list %}
+    """Execute the event {{ e.id }}: the states x and the constants p with the values.
+
+    A concentration in a compartment whose size the event changes keeps its amount:
+    it is scaled with the size before the event and divided by the size after it,
+    `{{ e.functions.sizes }}`, evaluated with the values the event assigned.
+    """
+{% else %}
+    """Execute the event {{ e.id }}: the states x and the constants p with the values."""
+{% endif %}
+{% set lines = body(e.scopes.assign) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+{% for a in e.assignments %}
+{% set value = "values[%d]" % loop.index0 %}
+{% if a.expr is none %}
+{% set value = a.scale %}
+{% elif a.scale is not none %}
+{% set value = value ~ " * " ~ a.scale %}
+{% endif %}
+{% if a.divisor_index is not none %}
+{% if loop.first or loop.previtem.divisor_index is none %}
+    sizes = {{ e.functions.sizes }}(t, x, p)
+{% endif %}
+{% set value = value ~ " / sizes[%d]" % a.divisor_index %}
+{% endif %}
+{% set vector = "x" if a.kind == "state" else "p" %}
+    {{ vector }} = {{ vector }}.at[{{ a.index }}].set({{ value }})  # {{ a.id }}{% if a.comment %} {{ a.comment }}{% endif %}
+
+{% endfor %}
+    return x, p
+{% endfor %}
+
+
+# the events in the order of the model, the trigger of the event k is the entry k of
+# `event_triggers` and `event_conditions`, its flags the entries k of the arrays
+EVENT_IDS = [
+{% for e in events %}
+    "{{ e.id }}",{{ comment(e.comment) }}
+{% endfor %}
+]
+# the value of each trigger before t = 0
+INITIAL_VALUE = jnp.array([{{ events | map(attribute="initial_value") | join(", ") }}])
+# whether an execution is kept when its trigger turns false before it
+PERSISTENT = jnp.array([{{ events | map(attribute="persistent") | join(", ") }}])
+# whether an execution assigns the values from the time its trigger turned true
+USE_TRIGGER_VALUES = jnp.array([{{ events | map(attribute="use_trigger_values") | join(", ") }}])
+
+
+def event_delay(
+    event_index: jax.Array, t: jax.Array, x: jax.Array, p: jax.Array
+) -> jax.Array:
+    """The delay of the event of the index, 0 for an event without a delay."""
+    return jax.lax.switch(event_index, [
+{% for e in events %}
+{% if e.functions.delay %}
+        {{ e.functions.delay }},
+{% else %}
+        lambda t, x, p: jnp.asarray(0.0, dtype=float),  # {{ e.id }}
+{% endif %}
+{% endfor %}
+    ], t, x, p)
+
+
+def event_priorities(t: jax.Array, x: jax.Array, p: jax.Array) -> jax.Array:
+    """The priority of each event, 0 for an event without a priority."""
+    return jnp.array([
+{% for e in events %}
+{% if e.functions.priority %}
+        {{ e.functions.priority }}(t, x, p),
+{% else %}
+        0.0,  # {{ e.id }}
+{% endif %}
+{% endfor %}
+    ], dtype=float)
+
+
+def event_values(
+    event_index: jax.Array, t: jax.Array, x: jax.Array, p: jax.Array
+) -> jax.Array:
+    """The values the event of the index assigns, padded with 0 to the most values."""
+    return jax.lax.switch(event_index, [
+{% for e in events %}
+{% if e.assignments | length < width %}
+        lambda t, x, p: jnp.pad({{ e.functions["values"] }}(t, x, p), (0, {{ width - e.assignments | length }})),
+{% else %}
+        {{ e.functions["values"] }},
+{% endif %}
+{% endfor %}
+    ], t, x, p)
+
+
+def event_assign(
+    event_index: jax.Array, t: jax.Array, x: jax.Array, p: jax.Array, values: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """Execute an event: the states x and the constants p with its values."""
+    return jax.lax.switch(event_index, [
+{% for e in events %}
+        {{ e.functions.assign }},
+{% endfor %}
+    ], t, x, p, values)
+{% endif %}
+{% if options.simulator %}
+
+
+class Simulation(NamedTuple):
+    """A simulation at its output times: the states, assigned values and constants."""
+
+    t: jax.Array  # the output times
+    x: jax.Array  # the states, a row per output time, a column per id of XIDS
+    y: jax.Array  # the assigned values, a column per id of YIDS
+    p: jax.Array  # the constants, a column per id of PIDS
+{% if events or states %}
+
+
+class Chord(diffrax.VeryChord):
+    """The chord method of an implicit solver, converged below `kappa`.
+
+    The iteration of a stage whose prediction is exact, e.g. of a rate which is
+    almost constant, is at the rounding errors from its first step on, and the ratio
+    of two of them is random: `diffrax.VeryChord` takes a ratio above 2 for a
+    divergence and rejects the step, under `jax.jit` every step. An increment below
+    `kappa` of the tolerances has converged, whatever the ratio
+    (https://github.com/patrick-kidger/diffrax/issues/782). Newton's method of
+    optimistix is no remedy, it compares the residual with the absolute tolerance
+    alone, which the rounding errors of a large state exceed.
+    """
+
+    def terminate(self, fn, y, args, options, state, tags):
+        terminate, result = super().terminate(fn, y, args, options, state, tags)
+        successful = optx.RESULTS.successful
+        small = (state.diffsize < self.kappa) & (state.result == successful)
+        return terminate | small, optx.RESULTS.where(small, successful, result)
+
+
+def default_solver() -> diffrax.AbstractSolver:
+    """The solver of `simulate` by default: Kvaerno5, implicit for stiff models.
+
+    Its nonlinear equations are solved by `Chord` at the tolerances of the integration.
+    """
+    chord = diffrax.with_stepsize_controller_tols(Chord)()
+    return diffrax.Kvaerno5(root_finder=chord)
+{% endif %}
+
+
+# the limits of a simulation: the steps of an integration beyond those which the largest
+# step forces{% if events %}, and the executions of events at one time, beyond which an infinite
+# cascade is probable{% endif %}
+
+MAX_STEPS = 100000
+{% if events %}
+MAX_CASCADE = 10000
+
+# the root finder, a bisection in the step in which the function of a trigger changes
+# its sign, locates its root to ROOT_TOLERANCE, the change of the trigger is searched
+# within ROOT_WINDOW of it (relative to the time)
+ROOT_TOLERANCE = 1e-12
+ROOT_WINDOW = 1e-10
+
+
+class ChangeBisection(optx.AbstractRootFinder):
+    """The root finder of a change of the triggers in a step of the integration.
+
+    diffrax passes the step as `lower` and `upper`, in which `trigger_change` turns
+    from at most 0 to positive, or, for a simulation of a batch without a change
+    while another one changes, the distance to the end of the step, whose root is
+    `upper`. A bisection always converges, the iteration of Newton can leave the
+    step, e.g. for a trigger `sin(10 * time) < 0`. The orientation of the function
+    is that of its values at the ends of the step, the bisection ends when the
+    interval is below the tolerances, and the root is the first time of the interval
+    at which the function is positive.
+    """
+
+    rtol: float
+    atol: float
+    norm: ClassVar = jnp.abs
+
+    def init(self, fn, y, args, options, f_struct, aux_struct, tags):
+        lower = jnp.asarray(options["lower"], f_struct.dtype)
+        upper = jnp.asarray(options["upper"], f_struct.dtype)
+        lower_value, _ = fn(lower, args)
+        upper_value, _ = fn(upper, args)
+        # a root at the end of the step, the distance to it
+        lower = jnp.where(upper_value == 0.0, upper, lower)
+        return lower, upper, lower_value <= upper_value
+
+    def step(self, fn, y, args, options, state, tags):
+        lower, upper, increasing = state
+        middle = lower + (upper - lower) / 2
+        value, aux = fn(middle, args)
+        before = (value <= 0.0) == increasing
+        lower = jnp.where(before, middle, lower)
+        upper = jnp.where(before, upper, middle)
+        return upper, (lower, upper, increasing), aux
+
+    def terminate(self, fn, y, args, options, state, tags):
+        lower, upper, _ = state
+        small = upper - lower <= self.atol + self.rtol * jnp.abs(upper)
+        return small, optx.RESULTS.successful
+
+    def postprocess(self, fn, y, aux, args, options, state, tags, result):
+        return y, aux, {}
+
+
+class Queue(NamedTuple):
+    """The scheduled executions of the events, one per slot of a fixed number."""
+
+    event: jax.Array  # the index of the event, -1 for a free slot
+    time: jax.Array  # the time of the execution, inf for a free slot
+    values: jax.Array  # the values from the time the trigger turned true
+    use_values: jax.Array  # whether the execution assigns `values`
+    order: jax.Array  # the number of the scheduling, ties of the priority go first
+    scheduled: jax.Array  # the number of schedulings so far
+
+
+class State(NamedTuple):
+    """A simulation at the end of a segment of the integration, after its events."""
+
+    t: jax.Array  # the time
+    x: jax.Array  # the states
+    p: jax.Array  # the constants
+    holds: jax.Array  # whether each trigger holds
+    queue: Queue  # the scheduled executions
+    xs: jax.Array  # the states at the output times before `filled`
+    ps: jax.Array  # the constants at the output times before `filled`
+    filled: jax.Array  # the time up to which the output times are filled
+    segments: jax.Array  # the number of segments so far
+
+
+def loop_kind(adjoint: diffrax.AbstractAdjoint) -> str:
+    """The kind of the loops of the events, which the adjoint differentiates.
+
+    The loops of the segments and of a cascade of events are loops of
+    `equinox.internal`, on which diffrax builds its adjoints: `"lax"` for forward
+    mode (`diffrax.ForwardMode`), `"bounded"` for both modes (`diffrax.DirectAdjoint`)
+    and `"checkpointed"` for reverse mode (every other adjoint).
+    """
+    if isinstance(adjoint, diffrax.ForwardMode):
+        return "lax"
+    if isinstance(adjoint, diffrax.DirectAdjoint):
+        return "bounded"
+    return "checkpointed"
+
+
+def vector_field(
+    t: jax.Array, y: jax.Array, args: tuple[jax.Array, jax.Array]
+) -> jax.Array:
+{% if states %}
+    """The rates of change of the integration, of the states with the constants."""
+    return f_dxdt(t, y, args[0])
+{% else %}
+    """The rate of change of a placeholder: the model has no states, the integration
+    advances the time to the changes of the triggers."""
+    return jnp.zeros_like(y)
+{% endif %}
+
+
+def trigger_change(
+    t: jax.Array, y: jax.Array, args: tuple[jax.Array, jax.Array], **kwargs: object
+) -> jax.Array:
+    """The root function of a change of the triggers, positive where one changed.
+
+    The function of each trigger, negated where the trigger holds, is negative until
+    the trigger changes; their maximum turns positive at the first change, which
+    diffrax locates as its root.
+    """
+    p, holds = args
+    roots = event_triggers(t, y{{ "[:0]" if not states }}, p)
+    return jnp.max(jnp.where(holds, -roots, roots))
+
+
+def first_change(
+    t: jax.Array, x: jax.Array, p: jax.Array, holds: jax.Array, t_start: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """The time at which a trigger changes, near the root of its function at t.
+
+    The root of the function of a trigger is located to `ROOT_TOLERANCE`, the trigger
+    changes at its root or right after it: bisection on the linear extrapolation of
+    the states x at t finds the first time with a change within `ROOT_WINDOW` of t,
+    from the start of the segment on, where the triggers are `holds`, to the rounding
+    error. `time >= 1` changes at t = 1. A trigger which keeps its value at its root
+    and changes right after it, `time > 1` at t = 1, changes at a time clearly after
+    the root, as an integrator locates it, so that the time stays after the root when
+    a delay is added to it.
+
+    Args:
+        t: the root
+        x: the states at t
+        p: the constants
+        holds: whether each trigger held before t
+        t_start: the start of the segment of the integration
+
+    Returns:
+        the time of the change, and whether a trigger changes near t at all
+    """
+    dx = f_dxdt(t, x, p)
+
+    def changed(t_point: jax.Array) -> jax.Array:
+        return jnp.any(event_conditions(t_point, x + (t_point - t) * dx, p) != holds)
+
+    def bisect(
+        _: int, bounds: tuple[jax.Array, jax.Array]
+    ) -> tuple[jax.Array, jax.Array]:
+        t_low, t_high = bounds
+        t_middle = t_low + (t_high - t_low) / 2
+        change = changed(t_middle)
+        return jnp.where(change, t_low, t_middle), jnp.where(change, t_middle, t_high)
+
+    window = ROOT_WINDOW * jnp.maximum(1.0, jnp.abs(t))
+    t_first = jnp.maximum(t - window, t_start)
+    early = changed(t_first)
+    late = changed(t + window)
+    t_low, t_high = jax.lax.fori_loop(0, 64, bisect, (t_first, t + window))
+    turned = event_conditions(t_high, x + (t_high - t) * dx, p) != holds
+    roots = event_triggers(t_low, x + (t_low - t) * dx, p)
+    at_root = jnp.any(turned & (roots == 0.0))
+    t_after = t_low + 1e-13 * jnp.maximum(1.0, jnp.abs(t_low))
+    t_high = jnp.where(at_root, t_after, t_high)
+    t_change = jnp.where(early, t_first, jnp.where(late, t_high, t))
+    return t_change, early | late
+
+
+def execute_events(
+    t: jax.Array,
+    x: jax.Array,
+    p: jax.Array,
+    holds: jax.Array,
+    queue: Queue,
+    kind: str,
+) -> tuple[jax.Array, jax.Array, jax.Array, Queue]:
+    """Execute the events due at the time t.
+
+    1. A trigger which turned true schedules an execution of its event at t plus
+       its delay, with the values of its assignments if it uses the values from
+       the trigger time; a trigger which turned false drops the executions of its
+       event unless it is persistent.
+    2. Of the executions due, the one of the highest priority is executed (an
+       event without a priority has the priority 0), ties in the order of
+       `EVENT_IDS`, then of their scheduling, which SBML leaves to chance.
+    3. The triggers are evaluated with the new states and constants, repeating
+       from step 1 until no execution is due: an event can trigger another one or
+       drop it. More than `MAX_CASCADE` executions at one time raise.
+
+    Args:
+        t: the time
+        x: the states
+        p: the constants
+        holds: whether each trigger held before t
+        queue: the scheduled executions
+        kind: the kind of the loop of the cascade, see `loop_kind`
+
+    Returns:
+        the states, the constants, whether each trigger holds and the scheduled
+        executions, after the events
+
+    Raises:
+        RuntimeError: for more than `MAX_CASCADE` executions, an infinite cascade,
+            and for more scheduled executions than the queue has slots
+    """
+    slots = jnp.arange(queue.event.shape[0])
+
+    def put(
+        event_index: jax.Array, x: jax.Array, p: jax.Array, queue: Queue
+    ) -> tuple[jax.Array, Queue]:
+        # the execution of the event in the first free slot; the errors are raised
+        # by arrays which are never empty and which the simulation uses
+        free = eqx.error_if(
+            queue.event < 0,
+            ~jnp.any(queue.event < 0),
+            "More executions of events are scheduled than `max_pending`.",
+        )
+        here = slots == jnp.argmax(free)
+        values = event_values(event_index, t, x, p)
+        queue = Queue(
+            event=jnp.where(here, event_index, queue.event),
+            time=jnp.where(here, t + event_delay(event_index, t, x, p), queue.time),
+            values=jnp.where(here[:, None], values[None, :], queue.values),
+            use_values=jnp.where(
+                here, USE_TRIGGER_VALUES[event_index], queue.use_values
+            ),
+            order=jnp.where(here, queue.scheduled, queue.order),
+            scheduled=queue.scheduled + 1,
+        )
+        return x, queue
+
+    def schedule(event_index: jax.Array, state: tuple) -> tuple:
+        # an execution of the event if its trigger turned true; the delay and the
+        # values of an event whose trigger did not turn are not evaluated
+        x, p, queue, turned = state
+        x, queue = jax.lax.cond(
+            turned[event_index],
+            put,
+            lambda event_index, x, p, queue: (x, queue),
+            event_index,
+            x,
+            p,
+            queue,
+        )
+        return x, p, queue, turned
+
+    def cascade(state: tuple) -> tuple:
+        x, p, holds, queue, executions, _ = state
+        holds_now = event_conditions(t, x, p)
+        # a trigger which turned false drops the executions of its event, unless the
+        # event is persistent
+        dropped = holds & ~holds_now & ~PERSISTENT
+        drop = (queue.event >= 0) & dropped[jnp.maximum(queue.event, 0)]
+        queue = queue._replace(
+            event=jnp.where(drop, -1, queue.event),
+            time=jnp.where(drop, jnp.inf, queue.time),
+        )
+        # a trigger which turned true schedules an execution of its event
+        turned = holds_now & ~holds
+        x, p, queue, _ = jax.lax.fori_loop(
+            0, len(EVENT_IDS), schedule, (x, p, queue, turned)
+        )
+        holds = holds_now
+
+        # the execution due of the highest priority, ties in the order of the events,
+        # then of their scheduling
+        due = (queue.event >= 0) & (queue.time <= t)
+        event = jnp.maximum(queue.event, 0)
+        priority = jnp.where(due, event_priorities(t, x, p)[event], -jnp.inf)
+        first = due & (priority == jnp.max(priority))
+        first &= queue.event == jnp.min(jnp.where(first, queue.event, len(EVENT_IDS)))
+        first &= queue.order == jnp.min(jnp.where(first, queue.order, queue.scheduled))
+        slot = jnp.argmax(first)
+        executed = jnp.any(due)
+        event_index = event[slot]
+        values = jnp.where(
+            queue.use_values[slot],
+            queue.values[slot],
+            event_values(event_index, t, x, p),
+        )
+        x_new, p_new = event_assign(event_index, t, x, p, values)
+        x = jnp.where(executed, x_new, x)
+        p = jnp.where(executed, p_new, p)
+        done = executed & (slots == slot)
+        queue = queue._replace(
+            event=jnp.where(done, -1, queue.event),
+            time=jnp.where(done, jnp.inf, queue.time),
+        )
+        executions = executions + executed
+        holds = eqx.error_if(
+            holds,
+            executions > MAX_CASCADE,
+            f"More than {MAX_CASCADE} events were executed at one time, the events "
+            "trigger each other in an infinite cascade.",
+        )
+        return x, p, holds, queue, executions, executed
+
+    x, p, holds, queue, _, _ = eqxi.while_loop(
+        lambda state: state[-1],
+        cascade,
+        (x, p, holds, queue, jnp.array(0), jnp.array(True)),
+        max_steps=MAX_CASCADE + 1,
+        kind=kind,
+    )
+    return x, p, holds, queue
+{% endif %}
+
+
+@eqx.filter_jit
+def simulate(
+    ts: jax.Array,
+    p: jax.Array | None = None,
+    x0: jax.Array | None = None,
+    *,
+    rtol: float = 1e-8,
+    atol: float = 1e-10,
+    solver: diffrax.AbstractSolver | None = None,
+    adjoint: diffrax.AbstractAdjoint | None = None,
+    max_step: float | None = None,
+    max_steps: int | None = None,
+{% if events %}
+    max_segments: int = 100000,
+    max_pending: int | None = None,
+{% endif %}
+) -> Simulation:
+{% if events %}
+    """Simulate the model from t = 0 to the last output time, with its events.
+
+    The triggers before t = 0 have their initial values, a trigger which holds at
+    t = 0 and has the initial value false fires at t = 0. The integration stops
+    where a trigger changes, at the execution of a delayed event and at the last
+    output time; there the events are executed, see `execute_events`, and the
+    integration restarts with the states and constants after them.
+
+    The integration finds a change of a trigger as a root of its function at the end
+    of a step, which is at most `max_step`: a trigger which holds for a shorter time
+    than a step can be stepped over. An output time at a delayed execution, to the
+    rounding of the time (1e-14 relative), has the values after it: the rounding
+    errors of the integration shift the time of the trigger, not its integration
+    error.
+{% else %}
+    """Simulate the model from t = 0 to the last output time.
+{% endif %}
+
+    `eqx.filter_jit` compiles the simulation for the number of output times and the
+    options, the output times, the constants and the initial states are traced: a
+    simulation with other values runs without a compilation.
+
+    Args:
+        ts: the output times, from 0 on and not decreasing
+        p: the constants, `P0` if not given
+        x0: the initial states, those of `initial_values` if not given
+        rtol: the relative tolerance of the integration
+        atol: the absolute tolerance of the integration
+        solver: the solver of diffrax, `default_solver()` if not given, Kvaerno5, an
+            implicit solver for stiff models; `diffrax.Tsit5()` for a model which is
+            not stiff
+        adjoint: the adjoint of diffrax, which decides how the simulation is
+            differentiated: `diffrax.RecursiveCheckpointAdjoint()` if not given, for
+            reverse mode (`jax.grad`), `diffrax.ForwardMode()` for forward mode
+            (`jax.jacfwd`), `diffrax.DirectAdjoint()` for both
+        max_step: the largest step of the integration, by default the distance of
+            the output times, `ts[-1] / (len(ts) - 1)`
+        max_steps: the largest number of steps of the integration{{ " of a segment" if events }}, by
+            default `MAX_STEPS` plus twice the number of output times
+{% if events %}
+        max_segments: the largest number of segments of the integration, between
+            the changes of the triggers and the executions of delayed events
+        max_pending: the largest number of executions of events which are
+            scheduled at a time, by default 100 and at least twice the number of
+            events
+{% endif %}
+
+    Returns:
+{% if events %}
+        the time, the states, the assigned values and the constants at the output
+        times, at the time of an event the values after it
+{% else %}
+        the time, the states, the assigned values and the constants at the output
+        times
+{% endif %}
+
+    Raises:
+        RuntimeError: for output times which are negative or decrease, if the
+            integration fails or takes more than `max_steps` steps, e.g. when a
+            state grows without bound{% if events %}, for an infinite cascade of events and
+            beyond `max_segments` and `max_pending`
+        ValueError: for `max_pending` below 1{% endif %}
+
+    """
+    ts = jnp.asarray(ts, dtype=float)
+    ts = eqx.error_if(
+        ts,
+        (ts[0] < 0.0) | jnp.any(ts[1:] < ts[:-1]),
+        "The output times ts must not be negative and must not decrease.",
+    )
+    x_initial, p = initial_values(p)
+    x = x_initial if x0 is None else jnp.asarray(x0, dtype=float)
+    points = ts.shape[0]
+    t_end = ts[-1]
+    if max_step is None:
+        max_step = t_end / (points - 1) if points > 1 else jnp.inf
+        max_step = jnp.where(max_step > 0.0, max_step, jnp.inf)
+    if max_steps is None:
+        max_steps = MAX_STEPS + 2 * points
+{% if events %}
+    if max_pending is None:
+        max_pending = max(100, 2 * len(EVENT_IDS))
+    if max_pending < 1:
+        raise ValueError(f"max_pending must be at least 1, not {max_pending}.")
+    solver = default_solver() if solver is None else solver
+    adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
+    # the values at the output times are interpolated in the steps; `step_ts`, which
+    # ends the steps at them, differentiates the start of a segment, an event time,
+    # wrongly (diffrax 0.7.2, https://github.com/patrick-kidger/diffrax/issues/772)
+    controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=max_step)
+    event = diffrax.Event(
+        trigger_change,
+        ChangeBisection(rtol=ROOT_TOLERANCE, atol=ROOT_TOLERANCE),
+        direction=True,
+    )
+    kind = loop_kind(adjoint)
+
+    # the triggers before t = 0 have their initial values
+    t = jnp.asarray(0.0)
+    queue = Queue(
+        event=jnp.full(max_pending, -1),
+        time=jnp.full(max_pending, jnp.inf),
+        values=jnp.zeros((max_pending, {{ width }})),
+        use_values=jnp.zeros(max_pending, dtype=bool),
+        order=jnp.zeros(max_pending, dtype=int),
+        scheduled=jnp.asarray(0),
+    )
+    x, p, holds, queue = execute_events(t, x, p, INITIAL_VALUE, queue, kind)
+    xs = jnp.zeros((points, len(XIDS)))
+    ps = jnp.zeros((points, len(PIDS)))
+
+    def integrate(state: State) -> State:
+        # a segment of the integration: to the change of a trigger, to the next
+        # execution of a delayed event or to the last output time, and the events then
+        t_stop = jnp.minimum(t_end, jnp.min(state.queue.time))
+        solution = diffrax.diffeqsolve(
+            diffrax.ODETerm(vector_field),
+            solver,
+            t0=state.t,
+            t1=t_stop,
+            dt0=None,
+            y0={{ "state.x" if states else "jnp.zeros(1)" }},
+            args=(state.p, state.holds),
+            saveat=diffrax.SaveAt(
+                subs=[
+                    diffrax.SubSaveAt(ts=jnp.clip(ts, state.t, t_stop)),
+                    diffrax.SubSaveAt(t1=True),
+                ]
+            ),
+            stepsize_controller=controller,
+            adjoint=adjoint,
+            event=event,
+            max_steps=max_steps,
+        )
+        t_root = solution.ts[1][0]
+        x_root = solution.ys[1][0]{{ "[:0]" if not states }}
+        at_root = solution.event_mask
+        t_change, changed = first_change(
+            t_root, x_root, state.p, state.holds, state.t
+        )
+        # the time of the change differs from the root by the rounding, which carries
+        # no derivative; the derivative of the root comes from the root finder
+        t_change = jnp.where(at_root & changed, t_change, t_root)
+        t_next = jax.lax.stop_gradient(t_change) + (
+            t_root - jax.lax.stop_gradient(t_root)
+        )
+        offset = jax.lax.stop_gradient(t_change - t_root)
+        x_next = x_root + offset * f_dxdt(t_root, x_root, state.p)
+        # the output times before the end of the segment, which a delayed execution
+        # and the last output time end to the rounding of the time
+        t_points = jnp.where(
+            at_root, t_next, t_next - 1e-14 * jnp.maximum(1.0, jnp.abs(t_next))
+        )
+        inside = (ts >= state.filled) & (ts < t_points)
+{% if states %}
+        x_points = jnp.where((ts <= t_root)[:, None], solution.ys[0], x_next)
+{% else %}
+        x_points = jnp.zeros((points, 0))
+{% endif %}
+        xs = jnp.where(inside[:, None], x_points, state.xs)
+        ps = jnp.where(inside[:, None], state.p, state.ps)
+        x, p, holds, queue = execute_events(
+            t_next, x_next, state.p, state.holds, state.queue, kind
+        )
+        filled = jnp.maximum(state.filled, t_points)
+        return State(t_next, x, p, holds, queue, xs, ps, filled, state.segments + 1)
+
+    state = eqxi.while_loop(
+        lambda state: state.t < t_end,
+        integrate,
+        State(t, x, p, holds, queue, xs, ps, jnp.asarray(-jnp.inf), jnp.asarray(0)),
+        max_steps=max_segments,
+        kind=kind,
+    )
+    # the output times at the last output time, after its events
+    after = ts >= state.filled
+    xs = jnp.where(after[:, None], state.x, state.xs)
+    ps = jnp.where(after[:, None], state.p, state.ps)
+    ts = eqx.error_if(
+        ts,
+        state.t < t_end,
+        f"The integration took more than {max_segments} segments.",
+    )
+{% else %}
+    ps = jnp.broadcast_to(p, (points, p.shape[0]))
+{% if states %}
+    solution = diffrax.diffeqsolve(
+        diffrax.ODETerm(f_dxdt),
+        default_solver() if solver is None else solver,
+        t0=0.0,
+        t1=t_end,
+        dt0=None,
+        y0=x,
+        args=p,
+        saveat=diffrax.SaveAt(ts=ts),
+        # the steps end at the output times, whose values are those of the solver,
+        # not of its interpolation, whose order is lower (3 for Kvaerno5)
+        stepsize_controller=diffrax.PIDController(
+            rtol=rtol, atol=atol, dtmax=max_step, step_ts=ts
+        ),
+        adjoint=diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint,
+        max_steps=max_steps,
+    )
+    xs = solution.ys
+{% else %}
+    # without states there is nothing to integrate
+    xs = jnp.broadcast_to(x, (points, 0))
+{% endif %}
+{% endif %}
+    return Simulation(ts, xs, jax.vmap(f_y)(ts, xs, ps), ps)
+
+
+def to_frame(simulation: Simulation) -> pd.DataFrame:
+{% if event_constants %}
+    """The simulation as a table: the time, the states, the assigned values and the
+    constants which events change, a row per output time."""
+    columns = [
+        "time", *XIDS, *YIDS,
+{% for c in event_constants %}
+        "{{ c.id }}",
+{% endfor %}
+    ]
+    constants = simulation.p[:, {{ wrapped(event_constants | map(attribute="index") | list, 4, 32, 1) }}]
+    data = np.column_stack([simulation.t, simulation.x, simulation.y, constants])
+{% else %}
+    """The simulation as a table: the time, the states and the assigned values, a row
+    per output time."""
+    columns = ["time", *XIDS, *YIDS]
+    data = np.column_stack([simulation.t, simulation.x, simulation.y])
+{% endif %}
+    return pd.DataFrame(data, columns=columns)
+
+
+if __name__ == "__main__":
+    print(to_frame(simulate(jnp.linspace(0.0, 10.0, 101))).head())
+{% endif %}

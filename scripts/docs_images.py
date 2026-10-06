@@ -1,8 +1,8 @@
 """The files of the documentation: the repressilator in every format of sbmlode.
 
-`sbmlode` writes the ODE system of a model as code which simulates it (python, julia,
-R) and as documents which describe it (typst, LaTeX, markdown). The script writes all
-six formats of the repressilator of Elowitz and Leibler (BIOMD0000000012), the
+`sbmlode` writes the ODE system of a model as code which simulates it (python, diffrax,
+julia, R) and as documents which describe it (typst, LaTeX, markdown). The script writes
+all seven formats of the repressilator of Elowitz and Leibler (BIOMD0000000012), the
 markdown in addition as a fragment to include into a document of its own
 (`standalone=False`), compiles the typst document to SVG, one file per page, if the
 `typst` package is installed (part of the `test` extra), and simulates the model with
@@ -37,8 +37,12 @@ REPRESSILATOR_SBML: Path = (
     / "BIOMD0000000012_urn.xml"
 )
 
-#: the file suffix of every format, in the order of `FORMATS`
-SUFFIXES: dict[str, str] = {name: fmt.suffixes[0] for name, fmt in FORMATS.items()}
+#: the ending of the file name of every format, in the order of `FORMATS`: its suffix,
+#: and for diffrax, which shares the suffix `.py` with python, `_diffrax.py`
+ENDINGS: dict[str, str] = {
+    name: fmt.suffixes[0] if fmt.suffixes else f"_{name}.py"
+    for name, fmt in FORMATS.items()
+}
 
 
 def export(sbml_path: Path, output_dir: Path, name: str) -> list[Path]:
@@ -54,7 +58,8 @@ def export(sbml_path: Path, output_dir: Path, name: str) -> list[Path]:
     """
     system = OdeSystem.from_sbml(sbml_path)
     paths = [
-        system.write(output_dir / f"{name}{suffix}") for suffix in SUFFIXES.values()
+        system.write(output_dir / f"{name}{ending}", fmt)
+        for fmt, ending in ENDINGS.items()
     ]
     # the markdown as a fragment to include into another document, as docs/ode.md does
     paths.append(system.write(output_dir / f"{name}_fragment.md", standalone=False))

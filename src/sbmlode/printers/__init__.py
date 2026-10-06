@@ -9,6 +9,7 @@ from sbmlode.printers.base import (
     UnsupportedMathError,
 )
 from sbmlode.printers.document import DocumentPrinter
+from sbmlode.printers.jax import JaxPrinter
 from sbmlode.printers.julia import JuliaPrinter
 from sbmlode.printers.latex import LatexPrinter
 from sbmlode.printers.python import PythonPrinter
@@ -17,6 +18,7 @@ from sbmlode.printers.typst import TypstPrinter
 
 PRINTERS: dict[str, type[MathPrinter]] = {
     PythonPrinter.name: PythonPrinter,
+    JaxPrinter.name: JaxPrinter,
     JuliaPrinter.name: JuliaPrinter,
     RPrinter.name: RPrinter,
     LatexPrinter.name: LatexPrinter,
@@ -27,6 +29,7 @@ PRINTERS: dict[str, type[MathPrinter]] = {
 __all__ = [
     "PRINTERS",
     "DocumentPrinter",
+    "JaxPrinter",
     "JuliaPrinter",
     "LatexPrinter",
     "MathPrinter",

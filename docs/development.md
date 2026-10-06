@@ -17,7 +17,7 @@ Neither branch accepts a direct push, every change goes through a pull request a
 
 | check | workflow | content |
 | --- | --- | --- |
-| `tests` | `ci-cd.yml` | the test matrix, linux with python 3.11 to 3.15 and the lowest versions of the dependencies, macos and windows with 3.14 |
+| `tests` | `ci-cd.yml` | the test matrix, linux with python 3.12 to 3.15 and the lowest versions of the dependencies, macos and windows with 3.14 |
 | `R` | `ci-cd.yml` | the generated R code, run with Rscript and deSolve |
 | `latex` | `ci-cd.yml` | the typst and LaTeX documents, compiled with typst and tectonic |
 | `ruff` | `ruff.yml` | `ruff check` and `ruff format --check` |
@@ -61,7 +61,7 @@ uv run pytest -m "not sbml_testsuite"         # the suite without the sweep over
 uv run pytest -m sbml_testsuite               # the sweep, every case of the SBML test suite
 tox r -e py3.14                               # one python version, as continuous integration runs it
 tox r -e py3.14 -- tests/test_ode_system.py   # one module in it
-tox r -e lowest                               # the lowest versions of the dependencies on python 3.11
+tox r -e lowest                               # the lowest versions of the dependencies on python 3.12
 ```
 
 The tests download the semantic cases of the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite) 3.4.0 once into the cache directory (`$XDG_CACHE_HOME/sbmlode`, else `~/.cache/sbmlode`); `SBMLODE_TESTSUITE` names a directory which holds `semantic/` instead. Offline and without it, the tests which read a case skip. The golden documents of `tests/golden/` are written again with `SBMLODE_UPDATE_GOLDEN=1`.
@@ -97,7 +97,7 @@ export SBMLODE_RSCRIPT="docker run --rm -v /tmp:/tmp sbmlode-r Rscript"
 
 ```bash
 uv run python scripts/ode_report.py
-uv run python scripts/ode_report.py --format julia --format r
+uv run python scripts/ode_report.py --format diffrax --format julia --format r
 ```
 
 ## Linting, formatting and type checking

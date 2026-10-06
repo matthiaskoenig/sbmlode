@@ -1,4 +1,4 @@
-"""Test the generated python, julia and R against roadrunner on the SBML test suite.
+"""Test the generated python, diffrax, julia and R against roadrunner on the test suite.
 
 Every case is the l3v2 flavour of a semantic case of the vendored test suite, see
 `tests/testsuite.py`, simulated to `T_END` at `T_STEPS` time points. A case with
@@ -9,7 +9,8 @@ roadrunner selection. The tolerances of a case with events are relaxed, an event
 time is located to the tolerance of the integration.
 
 `CURATED` runs in the default test run, the full sweeps `test_python_sweep`,
-`test_julia_sweep` and `test_r_sweep` behind the `sbml_testsuite` marker. A case
+`test_diffrax_sweep`, `test_julia_sweep` and `test_r_sweep` behind the
+`sbml_testsuite` marker; the diffrax tests skip without jax and diffrax. A case
 whose events are not deterministic is skipped (`NONDETERMINISTIC`), as is a case
 roadrunner does not simulate, which has no reference (the fbc cases, an
 integration which fails); a known failure is a strict xfail with its reason
@@ -45,6 +46,8 @@ from ode_helpers import (
     JobOutput,
     assert_table_as_roadrunner,
     assert_trajectory_as_roadrunner,
+    diffrax_frame,
+    diffrax_module,
     julia_simulate_job,
     python_module,
     r_simulate_job,
@@ -204,6 +207,42 @@ def check_python_case(
     return system
 
 
+def check_diffrax_case(
+    sbml_path: Path, tmp_path: Path, stage: Stage = _no_stage
+) -> OdeSystem:
+    """Check the diffrax code of a case: it refuses to render or simulates right.
+
+    Args:
+        sbml_path: path of the SBML file of the case
+        tmp_path: directory of the python file
+        stage: is told the stage the check enters
+
+    Returns:
+        the system of the case
+
+    Raises:
+        pytest.skip.Exception: if roadrunner does not simulate the case, and
+            without jax and diffrax
+    """
+    stage("read the model")
+    system = OdeSystem.from_sbml(sbml_path)
+    if system.unsupported:
+        stage("refuse to render")
+        with pytest.raises(NotImplementedError):
+            system.render("diffrax")
+        return system
+    stage("simulate the reference")
+    error = _reference_error(sbml_path)
+    if error is not None:
+        pytest.skip(f"roadrunner does not simulate the case: {error}")
+    stage("render")
+    module = diffrax_module(system, tmp_path / f"case_{sbml_path.name[:5]}.py")
+    stage("simulate and compare")
+    table = diffrax_frame(module, T_END, T_STEPS)
+    assert_table_as_roadrunner(sbml_path, table, *_tolerances(system))
+    return system
+
+
 def check_job_case(
     language: str,
     sbml_path: Path,
@@ -298,7 +337,7 @@ def run_worker(
         sbml_path: path of the SBML file of the case
         case_dir: directory of the case, which the python code and the outcome are
             written to
-        fmt: `python`, `julia` or `r`
+        fmt: `python`, `diffrax`, `julia` or `r`
         job_path: the code of the julia or R job of the case, which ran, see
             `run_jobs`; `None` without a job
     """
@@ -317,6 +356,8 @@ def run_worker(
     try:
         if fmt == "python":
             system = check_python_case(sbml_path, case_dir, stage)
+        elif fmt == "diffrax":
+            system = check_diffrax_case(sbml_path, case_dir, stage)
         else:
             system = check_job_case(fmt, sbml_path, output, stage)
     except pytest.skip.Exception as error:
@@ -395,6 +436,29 @@ def test_python_sweep(
     check_python_case(sbml_path, tmp_path)
 
 
+@requires_testsuite
+@pytest.mark.parametrize("case", CURATED)
+def test_diffrax_curated(
+    case: str, tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    """The diffrax code of a curated case simulates as roadrunner."""
+    pytest.importorskip("diffrax")
+    _mark("diffrax", case, request)
+    check_diffrax_case(suite_case(case), tmp_path)
+
+
+@requires_testsuite
+@pytest.mark.sbml_testsuite
+@pytest.mark.parametrize("sbml_path", SWEEP_CASES, ids=sbml_case_idfn)
+def test_diffrax_sweep(
+    sbml_path: Path, tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
+    """The diffrax code of every l3v2 case simulates as roadrunner."""
+    pytest.importorskip("diffrax")
+    _mark("diffrax", sbml_path.name[:5], request)
+    check_diffrax_case(sbml_path, tmp_path)
+
+
 def _check_curated(
     language: str, case: str, suite: Suite, request: pytest.FixtureRequest
 ) -> None:
@@ -460,7 +524,7 @@ def test_curated_cases_exist() -> None:
 
 
 @requires_testsuite
-@pytest.mark.parametrize("fmt", ["python", "julia", "r"])
+@pytest.mark.parametrize("fmt", ["python", "diffrax", "julia", "r"])
 def test_report(
     fmt: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -471,7 +535,9 @@ def test_report(
 
     Case 00001 passes, case 00039 has an algebraic rule, which is unsupported.
     """
-    if fmt != "python":
+    if fmt == "diffrax":
+        pytest.importorskip("diffrax")
+    elif fmt != "python":
         require_language(fmt)
     from scripts import ode_report
 

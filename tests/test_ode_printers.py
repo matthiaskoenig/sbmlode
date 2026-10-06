@@ -30,6 +30,7 @@ from sbmlode.printers.base import (
     Term,
 )
 from sbmlode.printers.document import DocumentPrinter
+from sbmlode.printers.jax import JaxPrinter
 from sbmlode.printers.julia import JuliaPrinter
 from sbmlode.printers.latex import LatexPrinter
 from sbmlode.printers.python import PythonPrinter
@@ -58,6 +59,11 @@ def mathml(content: str) -> libsbml.ASTNode:
 def py(formula: str) -> str:
     """Python of an L3 infix formula."""
     return PythonPrinter().print(parse(formula), SYMBOLS)
+
+
+def jx(formula: str) -> str:
+    """JAX of an L3 infix formula."""
+    return JaxPrinter().print(parse(formula), SYMBOLS)
 
 
 def jl(formula: str) -> str:
@@ -310,6 +316,7 @@ def test_python_mathml(content: str, expected: str) -> None:
 def test_formulas_of_dialects() -> None:
     """The python goldens are the rate laws shared by the tests of the dialects."""
     assert list(PYTHON_FORMULAS) == FORMULAS
+    assert list(JAX_FORMULAS) == FORMULAS
     assert list(JULIA_FORMULAS) == FORMULAS
     assert list(R_FORMULAS) == FORMULAS
 
@@ -329,7 +336,8 @@ def test_python_boolean_condition(content: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "printer", [PythonPrinter, JuliaPrinter, RPrinter, LatexPrinter, TypstPrinter]
+    "printer",
+    [PythonPrinter, JaxPrinter, JuliaPrinter, RPrinter, LatexPrinter, TypstPrinter],
 )
 @pytest.mark.parametrize(
     "content",
@@ -418,11 +426,224 @@ def test_precedence() -> None:
 def test_registry() -> None:
     """The printers are registered by the name of their dialect."""
     assert PRINTERS["python"] is PythonPrinter
+    assert PRINTERS["jax"] is JaxPrinter
     assert PRINTERS["julia"] is JuliaPrinter
     assert PRINTERS["r"] is RPrinter
     assert PRINTERS["latex"] is LatexPrinter
     assert PRINTERS["typst"] is TypstPrinter
     assert all(printer.name == name for name, printer in PRINTERS.items())
+
+
+# --- jax ----------------------------------------------------------------------------
+
+# every number is a float literal, a power is `jnp.power`: the integers of `jnp`
+# overflow and raise for a negative exponent, the `**` of two python floats is complex
+# for a negative base and a fractional exponent; a condition is a boolean array
+JAX_FORMULAS: dict[str, str] = {
+    "k*A": "k * A",
+    "ln(A) + log10(A) + log(2, A) + exp(-k)": "jnp.log(A) + jnp.log10(A) + jnp.log(A) / jnp.log(2.0) + jnp.exp(-k)",
+    "piecewise(k, A > 1 && !(A > 10) || xor(true, false), 2*k)": "jnp.where(jnp.logical_or(jnp.logical_and(A > 1.0, jnp.logical_not(A > 10.0)), jnp.logical_xor(True, False)), k, 2.0 * k)",
+    "piecewise(k, (A < 1) || (A >= 10), 3*k, A == 3, 0.1)": "jnp.where(jnp.logical_or(A < 1.0, A >= 10.0), k, jnp.where(A == 3.0, 3.0 * k, 0.1))",
+    "piecewise(k, A > 1)": "jnp.where(A > 1.0, k, jnp.nan)",
+    "rem(A, 2) + rem(-7, A) + quotient(7, A) + root(3, A) + sqrt(A) + A^2 + pow(A, k)": "jnp.fmod(A, 2.0) + jnp.fmod(-7.0, A) + jnp.trunc(7.0 / A) + jnp.power(A, 1.0 / 3.0) + jnp.sqrt(A) + jnp.power(A, 2.0) + jnp.power(A, k)",
+    "max(A, k, 1) + min(A, k) + abs(-A) + floor(A/2) + ceil(A/2)": "jnp.maximum(A, jnp.maximum(k, 1.0)) + jnp.minimum(A, k) + jnp.abs(-A) + jnp.floor(A / 2.0) + jnp.ceil(A / 2.0)",
+    "factorial(3) + pi + exponentiale": "jax.scipy.special.gamma(3.0 + 1.0) + jnp.pi + jnp.e",
+    "implies(A > 1, k > 1) + (A != 2) + (1 < A <= 5)": "jnp.where(jnp.logical_or(jnp.logical_not(A > 1.0), k > 1.0), 1.0, 0.0) + jnp.where(A != 2.0, 1.0, 0.0) + jnp.where(jnp.logical_and(1.0 < A, A <= 5.0), 1.0, 0.0)",
+    "piecewise(1, A < INF, 0) + piecewise(1, 5 > -INF, 0)": "jnp.where(A < jnp.inf, 1.0, 0.0) + jnp.where(5.0 > -jnp.inf, 1.0, 0.0)",
+    "sin(A) + cos(A) + tan(A) + sec(A) + csc(A) + cot(A)": "jnp.sin(A) + jnp.cos(A) + jnp.tan(A) + 1.0 / jnp.cos(A) + 1.0 / jnp.sin(A) + 1.0 / jnp.tan(A)",
+    "sinh(k) + cosh(k) + tanh(k) + sech(k) + csch(k) + coth(k)": "jnp.sinh(k) + jnp.cosh(k) + jnp.tanh(k) + 1.0 / jnp.cosh(k) + 1.0 / jnp.sinh(k) + 1.0 / jnp.tanh(k)",
+    "arcsin(k) + arccos(k) + arctan(k) + arcsinh(k) + arctanh(k)": "jnp.arcsin(k) + jnp.arccos(k) + jnp.arctan(k) + jnp.arcsinh(k) + jnp.arctanh(k)",
+    "arcsec(A) + arccsc(A) + arccot(A) + arccosh(A) + arcsech(k) + arccsch(k)": "jnp.arccos(1.0 / A) + jnp.arcsin(1.0 / A) + jnp.arctan(1.0 / A) + jnp.arccosh(A) + jnp.arccosh(1.0 / k) + jnp.arcsinh(1.0 / k)",
+    "arccoth(A)": "jnp.arctanh(1.0 / A)",
+    "piecewise(k*time, true, 0) + 2^-1 + -A^2 + 1/2 + (-2)^2 + 2^3^2": "jnp.where(True, k * t, 0.0) + jnp.power(2.0, -1.0) + -jnp.power(A, 2.0) + 1.0 / 2.0 + jnp.power(-2.0, 2.0) + jnp.power(2.0, jnp.power(3.0, 2.0))",
+}
+
+
+@pytest.mark.parametrize(("formula", "expected"), JAX_FORMULAS.items())
+def test_jax_formulas(formula: str, expected: str) -> None:
+    """The JAX of the rate laws verified against roadrunner, valid python."""
+    code = jx(formula)
+    assert code == expected
+    ast.parse(code, mode="eval")
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [
+        ("A + k + 1", "A + k + 1.0"),
+        ("A + (k + 1)", "A + (k + 1.0)"),
+        ("(A + k) * 2", "(A + k) * 2.0"),
+        ("A - k - 1", "A - k - 1.0"),
+        ("A - (k + 1)", "A - (k + 1.0)"),
+        ("A / k / 2", "A / k / 2.0"),
+        ("A / (k / 2)", "A / (k / 2.0)"),
+        ("A * (k / 2)", "A * (k / 2.0)"),
+        ("A / k * 2", "A / k * 2.0"),
+        ("A + -k", "A + -k"),
+        ("A * -k", "A * -k"),
+        ("-(A + k)", "-(A + k)"),
+        ("-(-A)", "-(-A)"),
+        ("-A * k", "-A * k"),
+        ("-(A * k)", "-(A * k)"),
+        ("(A^2)^3", "jnp.power(jnp.power(A, 2.0), 3.0)"),
+        ("(-A)^2", "jnp.power(-A, 2.0)"),
+        ("A^(k + 1)", "jnp.power(A, k + 1.0)"),
+        ("A^-k", "jnp.power(A, -k)"),
+        ("exp(A)^2", "jnp.power(jnp.exp(A), 2.0)"),
+        ("2 * A^2", "2.0 * jnp.power(A, 2.0)"),
+        ("factorial(A + 1)", "jax.scipy.special.gamma(A + 1.0 + 1.0)"),
+        (
+            "factorial(piecewise(1, A > 1, 2))",
+            "jax.scipy.special.gamma(jnp.where(A > 1.0, 1.0, 2.0) + 1.0)",
+        ),
+        ("quotient(A + 1, k * 2)", "jnp.trunc((A + 1.0) / (k * 2.0))"),
+        ("2 * sec(A + k)", "2.0 * (1.0 / jnp.cos(A + k))"),
+        ("A^sec(A)", "jnp.power(A, 1.0 / jnp.cos(A))"),
+        ("arcsec(A * k)", "jnp.arccos(1.0 / (A * k))"),
+        ("root(3, A + 1)", "jnp.power(A + 1.0, 1.0 / 3.0)"),
+        ("root(k + 1, A)", "jnp.power(A, 1.0 / (k + 1.0))"),
+        ("root(2.0, A)", "jnp.sqrt(A)"),
+        ("log(k, A) * 2", "jnp.log(A) / jnp.log(k) * 2.0"),
+        ("2 / log(k, A)", "2.0 / (jnp.log(A) / jnp.log(k))"),
+        ("log(10.0, A)", "jnp.log10(A)"),
+        (
+            "max(A + 1, piecewise(1, A > 1, 2))",
+            "jnp.maximum(A + 1.0, jnp.where(A > 1.0, 1.0, 2.0))",
+        ),
+        ("f(A + 1, k > 1)", "f(A + 1.0, jnp.where(k > 1.0, 1.0, 0.0))"),
+        (
+            "piecewise(piecewise(1, A > 1, 2), k > 1, 3)",
+            "jnp.where(k > 1.0, jnp.where(A > 1.0, 1.0, 2.0), 3.0)",
+        ),
+        (
+            "piecewise(1, A > 1, piecewise(2, k > 1, 3))",
+            "jnp.where(A > 1.0, 1.0, jnp.where(k > 1.0, 2.0, 3.0))",
+        ),
+        (
+            "piecewise(1, A > 1, 2, k > 1)",
+            "jnp.where(A > 1.0, 1.0, jnp.where(k > 1.0, 2.0, jnp.nan))",
+        ),
+        ("2 * piecewise(1, A > 1, 2)", "2.0 * jnp.where(A > 1.0, 1.0, 2.0)"),
+        ("!(A > 1)", "jnp.where(jnp.logical_not(A > 1.0), 1.0, 0.0)"),
+        (
+            "(A > 1) && (k > 1)",
+            "jnp.where(jnp.logical_and(A > 1.0, k > 1.0), 1.0, 0.0)",
+        ),
+        ("xor(A > 1, k > 1)", "jnp.where(jnp.logical_xor(A > 1.0, k > 1.0), 1.0, 0.0)"),
+        ("(A > 1) + 1", "jnp.where(A > 1.0, 1.0, 0.0) + 1.0"),
+        ("true + false", "jnp.where(True, 1.0, 0.0) + jnp.where(False, 1.0, 0.0)"),
+        ("max(A)", "A"),
+        ("min(A + 1) * 2", "(A + 1.0) * 2.0"),
+        ("pi * exponentiale", "jnp.pi * jnp.e"),
+        ("avogadro", "6.02214179e+23"),
+        ("INF - NaN", "jnp.inf - jnp.nan"),
+        ("1.5e-3", "0.0015"),
+        ("-INF", "-jnp.inf"),
+    ],
+)
+def test_jax_math(formula: str, expected: str) -> None:
+    """The JAX of every construct, with the parentheses its place requires."""
+    code = jx(formula)
+    assert code == expected
+    ast.parse(code, mode="eval")
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [
+        ("A > 1", "A > 1.0"),
+        ("!(A > 1 && k > 1)", "jnp.logical_not(jnp.logical_and(A > 1.0, k > 1.0))"),
+        (
+            "(A > 1 || k > 1) && A < 5",
+            "jnp.logical_and(jnp.logical_or(A > 1.0, k > 1.0), A < 5.0)",
+        ),
+        (
+            "A > 1 || k > 1 && A < 5",
+            "jnp.logical_and(jnp.logical_or(A > 1.0, k > 1.0), A < 5.0)",
+        ),
+        (
+            "A > 1 || (k > 1 && A < 5)",
+            "jnp.logical_or(A > 1.0, jnp.logical_and(k > 1.0, A < 5.0))",
+        ),
+        ("implies(A > 1, k > 1)", "jnp.logical_or(jnp.logical_not(A > 1.0), k > 1.0)"),
+        (
+            "implies(A > 1 || k > 1, A < 5)",
+            "jnp.logical_or(jnp.logical_not(jnp.logical_or(A > 1.0, k > 1.0)), A < 5.0)",
+        ),
+        (
+            "xor(A > 1, k > 1, A < 5)",
+            "jnp.logical_xor(A > 1.0, jnp.logical_xor(k > 1.0, A < 5.0))",
+        ),
+        ("!xor(A > 1, k > 1)", "jnp.logical_not(jnp.logical_xor(A > 1.0, k > 1.0))"),
+        ("true", "True"),
+        ("piecewise(A > 1, k > 1, false)", "jnp.where(k > 1.0, A > 1.0, False)"),
+    ],
+)
+def test_jax_condition(formula: str, expected: str) -> None:
+    """The JAX of math used as a condition is a boolean of `jnp`, never of python."""
+    code = JaxPrinter().print_condition(parse(formula), SYMBOLS)
+    assert code == expected
+    ast.parse(code, mode="eval")
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (
+            '<apply><lt/><cn type="integer">1</cn><ci>A</ci><cn type="integer">5</cn></apply>',
+            "jnp.where(jnp.logical_and(1.0 < A, A < 5.0), 1.0, 0.0)",
+        ),
+        (
+            "<apply><eq/><apply><gt/><ci>A</ci><ci>k</ci></apply><apply><lt/><ci>A</ci><ci>k</ci></apply></apply>",
+            "jnp.where(jnp.where(A > k, 1.0, 0.0) == jnp.where(A < k, 1.0, 0.0), 1.0, 0.0)",
+        ),
+        ("<apply><eq/><ci>A</ci></apply>", "jnp.where(True, 1.0, 0.0)"),
+        ("<apply><and/></apply>", "jnp.where(True, 1.0, 0.0)"),
+        ("<apply><or/></apply>", "jnp.where(False, 1.0, 0.0)"),
+        ("<apply><xor/></apply>", "jnp.where(False, 1.0, 0.0)"),
+        (
+            "<apply><and/><apply><gt/><ci>A</ci><ci>k</ci></apply></apply>",
+            "jnp.where(A > k, 1.0, 0.0)",
+        ),
+        ("<apply><plus/></apply>", "0.0"),
+        ("<apply><times/></apply>", "1.0"),
+        ("<apply><plus/><ci>A</ci></apply>", "A"),
+        ("<apply><times/><ci>k</ci><ci>A</ci><ci>A</ci></apply>", "k * A * A"),
+        ('<cn type="rational">1<sep/>2</cn>', "1.0 / 2.0"),
+        (
+            '<apply><times/><ci>k</ci><cn type="rational">1<sep/>2</cn></apply>',
+            "k * (1.0 / 2.0)",
+        ),
+        ('<cn type="e-notation">1<sep/>3</cn>', "1000.0"),
+        ('<cn type="integer">-2</cn>', "-2.0"),
+        (
+            '<apply><power/><cn type="integer">-2</cn><ci>A</ci></apply>',
+            "jnp.power(-2.0, A)",
+        ),
+        ("<apply><power/><cn>-2.5</cn><ci>A</ci></apply>", "jnp.power(-2.5, A)"),
+        ("<apply><log/><ci>A</ci></apply>", "jnp.log10(A)"),
+        ("<apply><root/><ci>A</ci></apply>", "jnp.sqrt(A)"),
+    ],
+)
+def test_jax_mathml(content: str, expected: str) -> None:
+    """The JAX of the constructs which only MathML can write."""
+    code = JaxPrinter().print(mathml(content), SYMBOLS)
+    assert code == expected
+    ast.parse(code, mode="eval")
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("<apply><and/></apply>", "True"),
+        ("<apply><or/></apply>", "False"),
+        ("<apply><eq/><ci>A</ci></apply>", "True"),
+        ("<false/>", "False"),
+    ],
+)
+def test_jax_boolean_condition(content: str, expected: str) -> None:
+    """A boolean constant used as a condition is a python bool, which JAX takes."""
+    assert JaxPrinter().print_condition(mathml(content), SYMBOLS) == expected
 
 
 # --- julia --------------------------------------------------------------------------
@@ -691,10 +912,10 @@ def test_r_condition(formula: str, expected: str) -> None:
     assert RPrinter().print_condition(parse(formula), SYMBOLS) == expected
 
 
-@pytest.mark.parametrize("printer", [JuliaPrinter, RPrinter])
+@pytest.mark.parametrize("printer", [JaxPrinter, JuliaPrinter, RPrinter])
 @pytest.mark.parametrize("formula", ["rateOf(A)", "delay(A, 1)"])
-def test_julia_r_unsupported(printer: type[MathPrinter], formula: str) -> None:
-    """A construct julia and R code cannot express raises."""
+def test_code_unsupported(printer: type[MathPrinter], formula: str) -> None:
+    """A construct JAX, julia and R code cannot express raises."""
     with pytest.raises(NotImplementedError, match=f"{printer.name} printer"):
         printer().print(parse(formula), SYMBOLS)
 
@@ -1494,7 +1715,7 @@ NAN_RELATIONS: dict[str, float] = {
 
 EVALUATED: list[str] = [*FORMULAS, *EDGE_FORMULAS, *NAN_RELATIONS]
 VALUES: dict[str, float] = {"A": 3.0, "k": 0.5, "t": 2.0}
-DIALECTS: list[str] = ["python", "julia", "r"]
+DIALECTS: list[str] = ["python", "jax", "julia", "r"]
 
 
 def _python_value(formula: str) -> float:
@@ -1508,6 +1729,24 @@ def _python_value(formula: str) -> float:
     variables = {name: np.float64(value) for name, value in VALUES.items()}
     with np.errstate(all="ignore"):
         return float(eval(code, {"np": np, "math": math, **variables}))  # noqa: S307
+
+
+def _jax_value(formula: str) -> float:
+    """Value of a formula, by `eval` of its JAX in a function compiled by `jax.jit`.
+
+    The variables are traced, as the states and the parameters of the generated
+    code, so that a construct which decides on a value with python fails.
+    """
+    jax = pytest.importorskip("jax")
+    jax.config.update("jax_enable_x64", True)
+    jnp = jax.numpy
+    code = JaxPrinter().print(parse(formula), SYMBOLS)
+
+    def value(**variables: object) -> object:
+        return eval(code, {"jnp": jnp, "jax": jax, **variables})  # noqa: S307
+
+    variables = {name: jnp.float64(value) for name, value in VALUES.items()}
+    return float(jax.jit(value)(**variables))
 
 
 def _julia_script(codes: list[str]) -> str:
@@ -1570,6 +1809,8 @@ def evaluate(
     def value(dialect: str, formula: str) -> float:
         if dialect == "python":
             return _python_value(formula)
+        if dialect == "jax":
+            return _jax_value(formula)
         command, printer, script, run = TOOLCHAINS[dialect]
         if command() is None:
             variable = {"julia": "SBMLODE_JULIA", "r": "SBMLODE_RSCRIPT"}[dialect]
@@ -1613,11 +1854,11 @@ def _assert_value(actual: float, expected: float) -> None:
 
 
 @pytest.mark.parametrize("formula", FORMULAS)
-@pytest.mark.parametrize("dialect", TOOLCHAINS)
+@pytest.mark.parametrize("dialect", ["jax", *TOOLCHAINS])
 def test_evaluation(
     dialect: str, formula: str, evaluate: Callable[[str, str], float]
 ) -> None:
-    """The julia and the R of a formula evaluate to the value of its python."""
+    """The JAX, julia and R of a formula evaluate to the value of its python."""
     expected = evaluate("python", formula)
     assert evaluate(dialect, formula) == pytest.approx(expected, rel=1e-12)
 

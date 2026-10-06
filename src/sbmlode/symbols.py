@@ -18,7 +18,7 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Literal
 
-from sbmlode.printers import JuliaPrinter, PythonPrinter, RPrinter
+from sbmlode.printers import JaxPrinter, JuliaPrinter, PythonPrinter, RPrinter
 from sbmlode.printers.base import MathPrinter
 from sbmlode.text import check_sid
 
@@ -31,7 +31,9 @@ Dialect = Literal["latex", "typst"]
 # The modules of the dialect tables: `np.abs` reserves the module `np` and the member
 # `abs`, the member being a name which an id could shadow in a language where it is
 # called without the module.
-_MODULES = PythonPrinter.MODULES | JuliaPrinter.MODULES | RPrinter.MODULES
+_MODULES = (
+    PythonPrinter.MODULES | JaxPrinter.MODULES | JuliaPrinter.MODULES | RPrinter.MODULES
+)
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_])\d+\.?\d*(?:[eE][+-]?\d+)?")
@@ -84,6 +86,28 @@ _PRINTED: dict[str, set[str]] = {
         "bool",
         "float",
     },
+    "jax": {
+        "jnp",
+        "jax",
+        "scipy",
+        "special",
+        "gamma",
+        "nan",
+        "inf",
+        "power",
+        "where",
+        "fmod",
+        "trunc",
+        "log",
+        "log10",
+        "sqrt",
+        "maximum",
+        "minimum",
+        "logical_and",
+        "logical_or",
+        "logical_xor",
+        "logical_not",
+    },
     "julia": {
         "NaNMath",
         "pow",
@@ -133,6 +157,37 @@ _GENERATED: dict[str, set[str]] = {
         "solver_type", "rows", "pt", "columns", "MAX_STEPS", "MAX_CASCADE",
         "max_steps", "steps", "step_size", "executions", "t_points",
         "change_in_step", "t_change", "t_point", "TRIGGER_POINTS",
+    },
+    # the names of `templates/diffrax.py.jinja`: the modules, its functions, their
+    # arguments and locals, as python
+    "jax": {
+        "t", "x", "p", "y", "x0",
+        "jax", "jnp", "lax", "diffrax", "eqx", "eqxi", "optx", "np", "pd", "NamedTuple",
+        "XIDS", "PIDS", "YIDS", "NAMES", "UNITS", "P0", "MAX_STEPS", "Simulation",
+        "f_dxdt", "f_y", "initial_values", "simulate", "to_frame",
+        "ts", "rtol", "atol", "solver", "adjoint", "max_step", "max_steps",
+        "x_initial", "points", "t_end", "solution", "xs", "ys", "ps", "data",
+        "columns", "constants", "simulation", "controller",
+        # the events
+        "EVENT_IDS", "INITIAL_VALUE", "PERSISTENT", "USE_TRIGGER_VALUES",
+        "MAX_CASCADE", "ROOT_TOLERANCE", "ROOT_WINDOW", "Queue", "State",
+        "event_triggers", "event_conditions", "event_delay", "event_priorities",
+        "event_values", "event_assign", "loop_kind", "vector_field", "trigger_change",
+        "first_change", "execute_events", "max_segments", "max_pending", "kind",
+        "event", "event_index", "values", "sizes", "args", "kwargs",
+        "dx", "changed", "change", "bisect", "bounds", "window", "early", "late",
+        "t_low", "t_high", "t_middle", "t_after", "t_point", "turned", "roots",
+        "root", "at_root", "t_change", "slots", "slot", "put", "schedule", "free",
+        "here", "queue", "time", "use_values", "order", "scheduled", "cascade",
+        "holds", "holds_now", "dropped", "drop", "due", "priority", "first",
+        "executed", "x_new", "p_new", "done", "executions", "state", "integrate",
+        "t_stop", "t_root", "x_root", "offset", "t_next", "x_next", "t_points",
+        "inside", "x_points", "filled", "segments", "after",
+        "ClassVar", "ChangeBisection", "self", "norm", "init", "step",
+        "terminate", "postprocess", "fn", "options", "f_struct", "aux_struct", "tags",
+        "lower", "upper", "lower_value", "upper_value", "increasing", "middle",
+        "value", "aux", "before", "small", "result", "t_start", "t_first",
+        "default_solver", "Chord", "chord", "super", "successful",
     },
     # the names of `resources/converters/ode/julia.jl.jinja`: the packages, the
     # names it imports, its functions, their arguments and locals
@@ -266,6 +321,9 @@ RESERVED: dict[str, frozenset[str]] = {
     "python": frozenset(
         _PYTHON | _written(PythonPrinter) | _PRINTED["python"] | _GENERATED["python"]
     ),
+    "jax": frozenset(
+        _PYTHON | _written(JaxPrinter) | _PRINTED["jax"] | _GENERATED["jax"]
+    ),
     "julia": frozenset(
         _JULIA | _written(JuliaPrinter) | _PRINTED["julia"] | _GENERATED["julia"]
     ),
@@ -311,7 +369,8 @@ def code_names(ids: Iterable[str], language: str) -> dict[str, str]:
 
     Args:
         ids: the ids of the model
-        language: `"python"`, `"julia"` or `"r"`
+        language: `"python"`, `"jax"` (the python of the diffrax code), `"julia"` or
+            `"r"`
 
     Returns:
         the name of every id, in the order of the ids
