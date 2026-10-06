@@ -13,6 +13,9 @@ sbmlode 0.2.0 writes the ODE system in the native quantities of the SBML state v
 - an event which changes a size rescales every species in concentration of the compartment with the size after the event, also when it changes a parameter of the assignment rule of the size; the code writes the function `event_sizes_<id>` of these sizes
 - `rateOf` of a species in concentration in a variable compartment and of a size with an assignment rule
 
+### Documentation
+- the logo of sbmlode in the README, the documentation, the release notes and as favicon
+
 ### Breaking changes
 - `OdeSystem.amounts`, `Quantity.amount_of`, `Ode.amount_of`, the origin `concentration` and the section `amounts` of the typed target and of the documents are removed, a species is never replaced by its amount `n_S`
 - `TypesetEventAssignment` has no field `species`, its `conversion` is `None` or `resized`
