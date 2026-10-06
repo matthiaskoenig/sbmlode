@@ -324,7 +324,8 @@ class Chord(diffrax.VeryChord):
     almost constant, is at the rounding errors from its first step on, and the ratio
     of two of them is random: `diffrax.VeryChord` takes a ratio above 2 for a
     divergence and rejects the step, under `jax.jit` every step. An increment below
-    `kappa` of the tolerances has converged, whatever the ratio. Newton's method of
+    `kappa` of the tolerances has converged, whatever the ratio
+    (https://github.com/patrick-kidger/diffrax/issues/782). Newton's method of
     optimistix is no remedy, it compares the residual with the absolute tolerance
     alone, which the rounding errors of a large state exceed.
     """

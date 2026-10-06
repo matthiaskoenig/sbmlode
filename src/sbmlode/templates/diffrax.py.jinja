@@ -440,7 +440,8 @@ class Chord(diffrax.VeryChord):
     almost constant, is at the rounding errors from its first step on, and the ratio
     of two of them is random: `diffrax.VeryChord` takes a ratio above 2 for a
     divergence and rejects the step, under `jax.jit` every step. An increment below
-    `kappa` of the tolerances has converged, whatever the ratio. Newton's method of
+    `kappa` of the tolerances has converged, whatever the ratio
+    (https://github.com/patrick-kidger/diffrax/issues/782). Newton's method of
     optimistix is no remedy, it compares the residual with the absolute tolerance
     alone, which the rounding errors of a large state exceed.
     """
@@ -885,7 +886,7 @@ def simulate(
     adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
     # the values at the output times are interpolated in the steps; `step_ts`, which
     # ends the steps at them, differentiates the start of a segment, an event time,
-    # wrongly (diffrax 0.7.2)
+    # wrongly (diffrax 0.7.2, https://github.com/patrick-kidger/diffrax/issues/772)
     controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=max_step)
     event = diffrax.Event(
         trigger_change,
