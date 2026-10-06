@@ -22,7 +22,10 @@ nav = [
   { "Guide" = "formats.md" },
   { "Typed target" = "typeset.md" },
   { "API reference" = "api.md" },
-  { "Design" = "design/2026-10-05-ode-export-design.md" },
+  { "Design" = [
+    { "ODE export" = "design/2026-10-05-ode-export-design.md" },
+    { "Native quantities" = "design/2026-10-06-native-quantities-design.md" },
+  ] },
   { "Release notes" = "release-notes.md" },
   { "Contributing" = "development.md" },
 ]
