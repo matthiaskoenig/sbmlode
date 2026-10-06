@@ -3,12 +3,12 @@
 Run the sweeps of `tests/test_ode_testsuite.py` over the l3v2 semantic cases and print a summary per format, for local runs and for the table of the documentation:
 
     uv run python scripts/ode_report.py
-    uv run python scripts/ode_report.py --format julia --format r
+    uv run python scripts/ode_report.py --format diffrax --format julia --format r
     uv run python scripts/ode_report.py --case 00001 --case 01124 --limit 150
 
-The format is `python` unless `--format` is given, which is repeatable. The julia and R code runs with the commands of `SBMLODE_JULIA` and `SBMLODE_RSCRIPT`, see `tests/ode_helpers.py`; the jobs of these run in a directory of the temporary directory, which a docker command has to mount (`-v /tmp:/tmp`).
+The format is `python` unless `--format` is given, which is repeatable; `diffrax` needs jax and diffrax, the extra `diffrax`. The julia and R code runs with the commands of `SBMLODE_JULIA` and `SBMLODE_RSCRIPT`, see `tests/ode_helpers.py`; the jobs of these run in a directory of the temporary directory, which a docker command has to mount (`-v /tmp:/tmp`).
 
-Every case is checked in a python process of its own, see `run_case_isolated` of `tests/testsuite.py`, whose worker is `tests/test_ode_testsuite.py`: roadrunner and the integrators are native code, and a crash ends one case instead of the report. A case is killed after `--timeout` seconds. The julia and R code of the cases runs before, in `--processes` processes of julia or R (`run_jobs`), which compile the integrator and load the packages once for many cases; a job which takes longer than `--timeout` seconds, its compilation included, or ends its process is reported as timed out or crashed, and the jobs which had not finished run again.
+Every case is checked in a python process of its own (for diffrax, which compiles the simulation of every case, that is most of the time of a case), see `run_case_isolated` of `tests/testsuite.py`, whose worker is `tests/test_ode_testsuite.py`: roadrunner and the integrators are native code, and a crash ends one case instead of the report. A case is killed after `--timeout` seconds. The julia and R code of the cases runs before, in `--processes` processes of julia or R (`run_jobs`), which compile the integrator and load the packages once for many cases; a job which takes longer than `--timeout` seconds, its compilation included, or ends its process is reported as timed out or crashed, and the jobs which had not finished run again.
 
 The outcomes are those of the tests of the sweep: passed, failed, unsupported (the code refuses to render a construct, counted by construct), no reference (roadrunner does not simulate the case, the tests skip it), not deterministic (`NONDETERMINISTIC`, the tests skip it), crashed, timed out and worker error. The pass rate is `passed / (passed + failed)`. A failure is listed with its reason from `KNOWN_FAILURES`, or as unexpected with its error; every known failure of a format is listed with its reason. The code and the outcome of every case are kept in `.ode_tmp/<format>/<case>/` for inspection.
 """
@@ -52,8 +52,11 @@ TMP_DIR: Path = ROOT / ".ode_tmp"
 WORKER: Path = ODE_TESTS / "test_ode_testsuite.py"
 """The worker of `run_case_isolated`, which checks a case in a format."""
 
-FORMATS: list[str] = ["python", "julia", "r"]
+FORMATS: list[str] = ["python", "diffrax", "julia", "r"]
 """The formats of code."""
+
+PYTHON_FORMATS: list[str] = ["python", "diffrax"]
+"""The formats of python code, which the worker simulates itself."""
 
 LABELS: dict[Outcome, str] = {
     Outcome.PASSED: "passed",
@@ -71,17 +74,20 @@ Results = list[tuple[str, CaseResult]]
 """The case id and the result of every case of a format."""
 
 
-def run_python_case(sbml_path: Path, timeout: float) -> tuple[str, CaseResult]:
+def run_python_case(
+    sbml_path: Path, timeout: float, fmt: str = "python"
+) -> tuple[str, CaseResult]:
     """Check the python code of a case in a process of its own.
 
     Args:
         sbml_path: path of the SBML file of the case
         timeout: seconds after which the case is killed
+        fmt: `python` or `diffrax`
 
     Returns:
         the case id and its result
     """
-    return run_case(sbml_path, timeout, TMP_DIR / "python", WORKER, ["python"])
+    return run_case(sbml_path, timeout, TMP_DIR / fmt, WORKER, [fmt])
 
 
 def run_language_jobs(
@@ -316,11 +322,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     summaries: dict[str, Results] = {}
     for fmt in dict.fromkeys(args.format or ["python"]):
         start = time.perf_counter()
-        if fmt == "python":
+        if fmt in PYTHON_FORMATS:
             with ThreadPoolExecutor(max_workers=args.jobs) as executor:
                 results = list(
                     executor.map(
-                        lambda path: run_python_case(path, args.timeout), cases
+                        lambda path, fmt=fmt: run_python_case(path, args.timeout, fmt),
+                        cases,
                     )
                 )
         else:

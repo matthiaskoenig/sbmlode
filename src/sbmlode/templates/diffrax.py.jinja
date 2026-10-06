@@ -67,10 +67,7 @@ returns the states, the assigned values and the constants at the output times ts
 """
 
 {% if options.simulator %}
-{% if events %}
-from functools import partial
-{% endif %}
-from typing import NamedTuple
+from typing import {{ "ClassVar, " if events }}NamedTuple
 
 import diffrax
 import equinox as eqx
@@ -443,10 +440,55 @@ MAX_STEPS = 100000
 {% if events %}
 MAX_CASCADE = 10000
 
-# the root finder locates the root of the function of a trigger to ROOT_TOLERANCE, the
-# change of the trigger is searched within ROOT_WINDOW of it (relative to the time)
+# the root finder, a bisection in the step in which the function of a trigger changes
+# its sign, locates its root to ROOT_TOLERANCE, the change of the trigger is searched
+# within ROOT_WINDOW of it (relative to the time)
 ROOT_TOLERANCE = 1e-12
 ROOT_WINDOW = 1e-10
+
+
+class ChangeBisection(optx.AbstractRootFinder):
+    """The root finder of a change of the triggers in a step of the integration.
+
+    diffrax passes the step as `lower` and `upper`, in which `trigger_change` turns
+    from at most 0 to positive, or, for a simulation of a batch without a change
+    while another one changes, the distance to the end of the step, whose root is
+    `upper`. A bisection always converges, the iteration of Newton can leave the
+    step, e.g. for a trigger `sin(10 * time) < 0`. The orientation of the function
+    is that of its values at the ends of the step, the bisection ends when the
+    interval is below the tolerances, and the root is the first time of the interval
+    at which the function is positive.
+    """
+
+    rtol: float
+    atol: float
+    norm: ClassVar = jnp.abs
+
+    def init(self, fn, y, args, options, f_struct, aux_struct, tags):
+        lower = jnp.asarray(options["lower"], f_struct.dtype)
+        upper = jnp.asarray(options["upper"], f_struct.dtype)
+        lower_value, _ = fn(lower, args)
+        upper_value, _ = fn(upper, args)
+        # a root at the end of the step, the distance to it
+        lower = jnp.where(upper_value == 0.0, upper, lower)
+        return lower, upper, lower_value <= upper_value
+
+    def step(self, fn, y, args, options, state, tags):
+        lower, upper, increasing = state
+        middle = lower + (upper - lower) / 2
+        value, aux = fn(middle, args)
+        before = (value <= 0.0) == increasing
+        lower = jnp.where(before, middle, lower)
+        upper = jnp.where(before, upper, middle)
+        return upper, (lower, upper, increasing), aux
+
+    def terminate(self, fn, y, args, options, state, tags):
+        lower, upper, _ = state
+        small = upper - lower <= self.atol + self.rtol * jnp.abs(upper)
+        return small, optx.RESULTS.successful
+
+    def postprocess(self, fn, y, aux, args, options, state, tags, result):
+        return y, aux, {}
 
 
 class Queue(NamedTuple):
@@ -503,40 +545,39 @@ def vector_field(
 
 
 def trigger_change(
-    event_index: int,
-    t: jax.Array,
-    y: jax.Array,
-    args: tuple[jax.Array, jax.Array],
-    **kwargs: object,
+    t: jax.Array, y: jax.Array, args: tuple[jax.Array, jax.Array], **kwargs: object
 ) -> jax.Array:
-    """The root function of the trigger of an event, positive where the trigger changed.
+    """The root function of a change of the triggers, positive where one changed.
 
-    The function of the trigger, negated where the trigger holds, so that diffrax
-    locates the change of the trigger as a root at which the function turns positive.
+    The function of each trigger, negated where the trigger holds, is negative until
+    the trigger changes; their maximum turns positive at the first change, which
+    diffrax locates as its root.
     """
     p, holds = args
-    root = event_triggers(t, y{{ "[:0]" if not states }}, p)[event_index]
-    return jnp.where(holds[event_index], -root, root)
+    roots = event_triggers(t, y{{ "[:0]" if not states }}, p)
+    return jnp.max(jnp.where(holds, -roots, roots))
 
 
 def first_change(
-    t: jax.Array, x: jax.Array, p: jax.Array, holds: jax.Array
+    t: jax.Array, x: jax.Array, p: jax.Array, holds: jax.Array, t_start: jax.Array
 ) -> tuple[jax.Array, jax.Array]:
     """The time at which a trigger changes, near the root of its function at t.
 
     The root of the function of a trigger is located to `ROOT_TOLERANCE`, the trigger
     changes at its root or right after it: bisection on the linear extrapolation of
-    the states x at t finds the first time with a change within `ROOT_WINDOW` of t, to
-    the rounding error. `time >= 1` changes at t = 1. A trigger which keeps its value
-    at its root and changes right after it, `time > 1` at t = 1, changes at a time
-    clearly after the root, as an integrator locates it, so that the time stays after
-    the root when a delay is added to it.
+    the states x at t finds the first time with a change within `ROOT_WINDOW` of t,
+    from the start of the segment on, where the triggers are `holds`, to the rounding
+    error. `time >= 1` changes at t = 1. A trigger which keeps its value at its root
+    and changes right after it, `time > 1` at t = 1, changes at a time clearly after
+    the root, as an integrator locates it, so that the time stays after the root when
+    a delay is added to it.
 
     Args:
         t: the root
         x: the states at t
         p: the constants
         holds: whether each trigger held before t
+        t_start: the start of the segment of the integration
 
     Returns:
         the time of the change, and whether a trigger changes near t at all
@@ -555,15 +596,16 @@ def first_change(
         return jnp.where(change, t_low, t_middle), jnp.where(change, t_middle, t_high)
 
     window = ROOT_WINDOW * jnp.maximum(1.0, jnp.abs(t))
-    early = changed(t - window)
+    t_first = jnp.maximum(t - window, t_start)
+    early = changed(t_first)
     late = changed(t + window)
-    t_low, t_high = jax.lax.fori_loop(0, 64, bisect, (t - window, t + window))
+    t_low, t_high = jax.lax.fori_loop(0, 64, bisect, (t_first, t + window))
     turned = event_conditions(t_high, x + (t_high - t) * dx, p) != holds
     roots = event_triggers(t_low, x + (t_low - t) * dx, p)
     at_root = jnp.any(turned & (roots == 0.0))
     t_after = t_low + 1e-13 * jnp.maximum(1.0, jnp.abs(t_low))
     t_high = jnp.where(at_root, t_after, t_high)
-    t_change = jnp.where(early, t - window, jnp.where(late, t_high, t))
+    t_change = jnp.where(early, t_first, jnp.where(late, t_high, t))
     return t_change, early | late
 
 
@@ -809,9 +851,9 @@ def simulate(
     adjoint = diffrax.RecursiveCheckpointAdjoint() if adjoint is None else adjoint
     controller = diffrax.PIDController(rtol=rtol, atol=atol, dtmax=max_step)
     event = diffrax.Event(
-        [partial(trigger_change, index) for index in range(len(EVENT_IDS))],
-        optx.Newton(rtol=ROOT_TOLERANCE, atol=ROOT_TOLERANCE),
-        direction=[True] * len(EVENT_IDS),
+        trigger_change,
+        ChangeBisection(rtol=ROOT_TOLERANCE, atol=ROOT_TOLERANCE),
+        direction=True,
     )
     kind = loop_kind(adjoint)
 
@@ -854,14 +896,17 @@ def simulate(
         )
         t_root = solution.ts[1][0]
         x_root = solution.ys[1][0]{{ "[:0]" if not states }}
-        at_root = jnp.any(jnp.array(solution.event_mask))
-        t_change, changed = first_change(t_root, x_root, state.p, state.holds)
+        at_root = solution.event_mask
+        t_change, changed = first_change(
+            t_root, x_root, state.p, state.holds, state.t
+        )
         # the time of the change differs from the root by the rounding, which carries
         # no derivative; the derivative of the root comes from the root finder
-        offset = jnp.where(
-            at_root & changed, jax.lax.stop_gradient(t_change - t_root), 0.0
+        t_change = jnp.where(at_root & changed, t_change, t_root)
+        t_next = jax.lax.stop_gradient(t_change) + (
+            t_root - jax.lax.stop_gradient(t_root)
         )
-        t_next = t_root + offset
+        offset = jax.lax.stop_gradient(t_change - t_root)
         x_next = x_root + offset * f_dxdt(t_root, x_root, state.p)
         # the output times before the end of the segment, which a delayed execution
         # and the last output time end to the rounding of the time
