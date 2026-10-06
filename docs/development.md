@@ -24,7 +24,7 @@ Neither branch accepts a direct push, every change goes through a pull request a
 | `ty` | `ty.yml` | `tox r -e ty` |
 | `docs` | `docs.yml` | the release notes check and the strict zensical build including the API reference |
 
-`tests` aggregates the test matrix into a single job, so the name of the required check stays the same when the matrix changes. The job `julia` runs the generated julia code; its packages take long to install and precompile, so it runs only for a release tag and on demand (`workflow_dispatch`) and is not a required check.
+`tests` aggregates the test matrix into a single job, so the name of the required check stays the same when the matrix changes. The job `julia` runs the generated julia code; its packages take long to install and precompile, so it runs only for a release tag and on demand (`workflow_dispatch`): it is no required check of a pull request, but the release of a tag waits for it.
 
 Further rules: conversations have to be resolved before the merge, an approval is dismissed when new commits are pushed, the history stays linear (squash or rebase, no merge commits), and the maintainer is the code owner (`.github/CODEOWNERS`).
 

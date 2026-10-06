@@ -117,9 +117,9 @@ jobs:
   julia:
     # the generated julia code, run with julia and the packages it uses, see the
     # `julia` environment of tox.ini, in which a missing julia fails the tests.
-    # It informs and does not gate: it is deliberately not a check the branch
-    # protection requires, so that an outage of the julia toolchain does not block
-    # a merge. Installing and precompiling the
+    # It is not a check the branch protection requires, so that an outage of the
+    # julia toolchain does not block a merge, but a release needs it: the `build`
+    # of a tag waits for it. Installing and precompiling the
     # julia packages takes long, so it runs only for a release (a tag) and on
     # demand (`workflow_dispatch`), not for every pull request.
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -265,7 +265,7 @@ jobs:
   build:
     # builds the distributions of a release without any write permission; the
     # jobs which publish them only download what was built here
-    needs: [tests, R, latex]
+    needs: [tests, R, latex, julia]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
