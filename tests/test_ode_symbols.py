@@ -177,16 +177,19 @@ def test_python_keywords_and_builtins_are_reserved() -> None:
 IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z_][A-Za-z0-9_.]*")
 NUMBER = re.compile(r"(?<![A-Za-z0-9_])\d+\.?\d*(?:[eE][+-]?\d+)?")
 FORMULA_SYMBOLS = {"A": "A", "k": "k", "f": "f"}
-MODULES = {"np", "NaNMath", "math"}
+MODULES = {"np", "NaNMath", "math", "jnp", "jax"}
 
 
 def _parts(name: str) -> list[str]:
-    """The names a written name reserves: `np.abs` is the module and the member."""
-    module, _, member = name.partition(".")
-    return [module, member] if module in MODULES else [name]
+    """The names a written name reserves: `np.abs` is the module and the member.
+
+    `jax.scipy.special.gamma` reserves every part.
+    """
+    module, *members = name.split(".")
+    return [module, *members] if module in MODULES else [name]
 
 
-@pytest.mark.parametrize("language", ["python", "julia", "r"])
+@pytest.mark.parametrize("language", ["python", "jax", "julia", "r"])
 def test_every_name_of_the_dialect_is_reserved(language: str) -> None:
     """Every function, constant and module the printer writes is reserved.
 
@@ -221,6 +224,7 @@ def test_every_name_of_the_dialect_is_reserved(language: str) -> None:
     ("language", "names"),
     [
         ("python", ["t", "x", "p", "dx", "y", "x0", "p0", "np", "math", "pd", "scipy"]),
+        ("jax", ["t", "x", "p", "y", "x0", "jax", "jnp", "diffrax", "eqx", "pd"]),
         (
             "julia",
             ["t", "x", "p", "dx", "y", "x0", "p0", "NaNMath", "SpecialFunctions"],
@@ -460,7 +464,7 @@ def test_typeset_names_reject_ids_which_are_no_sid() -> None:
         typeset_names(["a b"], "latex")
 
 
-@pytest.mark.parametrize("language", ["python", "julia", "r"])
+@pytest.mark.parametrize("language", ["python", "jax", "julia", "r"])
 def test_code_names_reject_ids_which_are_no_sid(language: str) -> None:
     """An id which is no SId is never written as code."""
     with pytest.raises(ValueError, match="SId"):

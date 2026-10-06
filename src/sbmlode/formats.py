@@ -1,8 +1,8 @@
 """The formats of the ODE export: their registry, rendering context and templates.
 
 A format is a jinja2 template in `sbmlode/templates` with the math
-printer of its language (`Format`, `FORMATS`): code which simulates the model (python,
-julia, R, option `simulator`) or a document which describes it (typst, LaTeX,
+printer of its language (`Format`, `FORMATS`): code which simulates the model (python
+with numpy and scipy, python with JAX and diffrax, julia, R, option `simulator`) or a document which describes it (typst, LaTeX,
 markdown, options `standalone` and `symbols`). `render` checks the options against
 the format, builds the names of the symbols in the format (`symbols.code_names` for
 code, `symbols.typeset_names` for documents), prints every math of the system once
@@ -105,10 +105,11 @@ class Format:
     """An output format of the ODE export.
 
     Attributes:
-        name: the name, e.g. `"python"`
+        name: the name, e.g. `"python"` or `"diffrax"`
         kind: `"code"`, which simulates the model, or `"document"`, which describes it
         template: the file name of the template in `TEMPLATE_DIR`
-        suffixes: the file suffixes `write` takes the format from, case sensitive
+        suffixes: the file suffixes `write` takes the format from, case sensitive;
+            none for a format which shares the suffix of another one
         printer: the key of the math printer in `printers.PRINTERS`, for code also
             the language of `symbols.code_names`
         options: the options the format accepts with their defaults
@@ -132,6 +133,15 @@ FORMATS: dict[str, Format] = {
         template="python.py.jinja",
         suffixes=(".py",),
         printer="python",
+        options={"simulator": True},
+    ),
+    "diffrax": Format(
+        name="diffrax",
+        kind="code",
+        template="diffrax.py.jinja",
+        # `.py` is the suffix of the format `python`, `write` takes `fmt="diffrax"`
+        suffixes=(),
+        printer="jax",
         options={"simulator": True},
     ),
     "julia": Format(

@@ -63,7 +63,7 @@ from ode_helpers import (
 from sbmlode import OdeSystem
 from sbmlode.text import single_line
 
-CODE_FORMATS = ["python", "julia", "r"]
+CODE_FORMATS = ["python", "diffrax", "julia", "r"]
 """The formats of code."""
 
 DOCUMENT_FORMATS = ["typst", "latex", "markdown"]
@@ -253,12 +253,16 @@ def _identifiers(tree: ast.AST) -> set[str]:
     return found
 
 
+@pytest.mark.parametrize("fmt", ["python", "diffrax"])
 @pytest.mark.parametrize("simulator", [True, False])
 def test_python_text_is_no_code(
-    simulator: bool, injected: OdeSystem, tmp_path: Path
+    fmt: str, simulator: bool, injected: OdeSystem, tmp_path: Path
 ) -> None:
-    """The python code parses without injected names and holds the text unchanged."""
-    code = injected.render("python", simulator=simulator)
+    """The python code parses without injected names and holds the text unchanged.
+
+    So does the python of diffrax.
+    """
+    code = injected.render(fmt, simulator=simulator)
     assert not {n for n in _identifiers(ast.parse(code)) if "INJECTED" in n}
     path = tmp_path / "injected.py"
     path.write_text(code, encoding="utf-8")

@@ -246,9 +246,10 @@ def edit_sbml(
 def import_module(path: Path) -> ModuleType:
     """Import the python module written to the given path.
 
-    The code of the simulator (`simulator=True`) imports scipy, which is no
-    dependency of the package but of the `examples` extra: without it the test
-    skips rather than fails, as the tests which simulate with roadrunner do.
+    The code of the simulator (`simulator=True`) imports scipy, the diffrax code
+    jax and diffrax, which are no dependencies of the package but of its extras
+    `simulate` and `diffrax`: without them the test skips rather than fails, as the
+    tests which simulate with roadrunner do.
 
     Args:
         path: path of the python file, its stem is the name of the module
@@ -256,8 +257,10 @@ def import_module(path: Path) -> ModuleType:
     Returns:
         the imported module
     """
-    if "scipy" in _imported_modules(path.read_text(encoding="utf-8")):
-        pytest.importorskip("scipy")
+    imported = _imported_modules(path.read_text(encoding="utf-8"))
+    for package in ("scipy", "jax", "diffrax"):
+        if package in imported:
+            pytest.importorskip(package)
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec
     assert spec.loader
@@ -1590,4 +1593,106 @@ def assert_trajectory_as_roadrunner(
     pytest.importorskip("roadrunner")
     pytest.importorskip("scipy")
     df = module.simulate(t_end, points, rtol=1e-10, atol=1e-12)
+    assert_table_as_roadrunner(sbml, df, rtol, atol, t_end, points)
+
+
+# --- diffrax ----------------------------------------------------------------------------
+
+
+def diffrax_module(system: OdeSystem, path: Path, **options: object) -> ModuleType:
+    """Write the diffrax code of a system and import it.
+
+    Args:
+        system: the ODE system
+        path: path of the python file
+        **options: the options of the diffrax format
+
+    Returns:
+        the imported module
+    """
+    system.write(path, "diffrax", **options)
+    return import_module(path)
+
+
+def assert_diffrax_as_roadrunner(sbml: str | Path, tmp_path: Path) -> ModuleType:
+    """Assert that the generated diffrax code computes the values of roadrunner.
+
+    See `assert_values_as_roadrunner`, the points are those of `other_states`; the
+    functions run compiled by `jax.jit`, so that math which JAX cannot trace fails.
+
+    Args:
+        sbml: the SBML of the model or the path of its file
+        tmp_path: directory of the python file
+
+    Returns:
+        the module of the generated diffrax code
+    """
+    pytest.importorskip("roadrunner")
+    jax = pytest.importorskip("jax")
+    system = OdeSystem.from_sbml(sbml)
+    module = diffrax_module(system, tmp_path / "model.py", simulator=False)
+    f_dxdt = jax.jit(module.f_dxdt)
+    f_y = jax.jit(module.f_y)
+    x0, p = (np.asarray(v) for v in jax.jit(module.initial_values)(module.P0))
+    points = []
+    for t, x in other_states(x0):
+        points.append((t, x, np.asarray(f_dxdt(t, x, p)), np.asarray(f_y(t, x, p))))
+    values = PointValues(
+        xids=list(module.XIDS),
+        pids=list(module.PIDS),
+        yids=list(module.YIDS),
+        x0=x0,
+        p=p,
+        y0=np.asarray(f_y(0.0, x0, p)),
+        points=points,
+    )
+    assert_values_as_roadrunner(sbml, values)
+    return module
+
+
+def diffrax_frame(
+    module: ModuleType,
+    t_end: float = T_END,
+    points: int = T_STEPS,
+    **options: object,
+) -> pd.DataFrame:
+    """The table of a simulation of the generated diffrax code, as roadrunner runs it.
+
+    Args:
+        module: the module of the generated diffrax code, with `simulate`
+        t_end: the end time
+        points: the number of time points, 0 and `t_end` included
+        **options: the options of `simulate`, by default the tolerances 1e-10 and
+            1e-12 of the reference
+
+    Returns:
+        the table of `to_frame`
+    """
+    options = {"rtol": 1e-10, "atol": 1e-12, **options}
+    ts = np.linspace(0.0, t_end, points)
+    return module.to_frame(module.simulate(ts, **options))
+
+
+def assert_diffrax_trajectory_as_roadrunner(
+    sbml: str | Path,
+    module: ModuleType,
+    rtol: float = 1e-6,
+    atol: float = 1e-9,
+    t_end: float = T_END,
+    points: int = T_STEPS,
+) -> None:
+    """Assert that `simulate` of the generated diffrax code integrates as roadrunner.
+
+    See `assert_table_as_roadrunner`.
+
+    Args:
+        sbml: the SBML of the model or the path of its file
+        module: the module of the generated diffrax code, with `simulate`
+        rtol: the relative tolerance of the comparison
+        atol: the absolute tolerance of the comparison
+        t_end: the end time
+        points: the number of time points
+    """
+    pytest.importorskip("roadrunner")
+    df = diffrax_frame(module, t_end, points)
     assert_table_as_roadrunner(sbml, df, rtol, atol, t_end, points)
