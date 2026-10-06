@@ -112,16 +112,19 @@ The python, diffrax, julia and R code have the same structure. Python and diffra
 6. The events, see [Events](#events).
 7. `simulate(t_end)` (only `simulator=True`), which integrates the model from $t = 0$ to `t_end`, executes the events and returns a table of the time, the states and the assigned values at `points` time points (101 by default); `simulate(ts)` of diffrax takes the output times themselves and returns arrays.
 
-The arguments follow the convention of the solvers of each language:
+The arguments follow the convention of the solvers of each language; `initial_values(p)` returns the initial states and the constants, a tuple `(x0, p)`, in R a list of `x0` and `p`:
+
+<div class="doc-compact" markdown>
 
 | | python | diffrax | julia | R |
 | --- | --- | --- | --- | --- |
-| initial values | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a tuple `(x0, p)` | `initial_values(p)`, a list of `x0` and `p` |
-| right hand side | `f_dxdt(t, x, p)`, an array | `f_dxdt(t, x, p)`, an array of JAX, a vector field of diffrax | `f!(dx, x, p, t)`, in place | `f_dxdt(t, x, p)`, `list(dx)` as deSolve wants it |
+| right hand side | `f_dxdt(t, x, p)` | `f_dxdt(t, x, p)`, a vector field of diffrax | `f!(dx, x, p, t)`, in place | `f_dxdt(t, x, p)`, `list(dx)` as deSolve wants it |
 | assigned values | `f_y(t, x, p)` | `f_y(t, x, p)` | `f_y(x, p, t)` | `f_y(t, x, p)` |
-| simulation | `simulate(t_end)`, a pandas `DataFrame` | `simulate(ts)`, a `Simulation` of arrays, `to_frame` a pandas `DataFrame` | `simulate(t_end)`, a `DataFrame` of DataFrames.jl | `simulate(t_end)`, a `data.frame` |
-| solver | a `scipy.integrate` `OdeSolver`, `LSODA` by default | a solver of diffrax, `Kvaerno5()` by default | `Rodas5P()` of OrdinaryDiffEq | `deSolve::lsoda` |
-| dependencies | numpy, pandas, scipy | jax, diffrax, equinox, optimistix, pandas | OrdinaryDiffEq, DataFrames, NaNMath (SpecialFunctions if the math uses `factorial`) | base R, deSolve for `simulate` |
+| simulation | `simulate(t_end)`, a pandas `DataFrame` | `simulate(ts)`, arrays, `to_frame` a pandas `DataFrame` | `simulate(t_end)`, a `DataFrame` of DataFrames.jl | `simulate(t_end)`, a `data.frame` |
+| solver | `LSODA` of `scipy.integrate` | `Kvaerno5()` of diffrax | `Rodas5P()` of OrdinaryDiffEq | `deSolve::lsoda` |
+| dependencies | numpy, pandas, scipy | jax, diffrax, equinox, optimistix, pandas | OrdinaryDiffEq, DataFrames, NaNMath, SpecialFunctions for `factorial` | base R, deSolve for `simulate` |
+
+</div>
 
 `simulate` integrates with a relative tolerance of `1e-8` and an absolute tolerance of `1e-10` by default, with a largest step of the distance of two time points, and limits the number of steps of the solver: a model which grows without bound raises an error instead of running for ever. Every function evaluates the assignments it needs itself, so it can be read, and changed, on its own; the code has no classes, only constants and functions.
 
@@ -172,7 +175,8 @@ The diffrax code is python whose functions are functions of JAX: `jax.jit` compi
 ```python
 from sbmlode import OdeSystem
 
-OdeSystem.from_sbml("BIOMD0000000012_urn.xml").write("repressilator_diffrax.py", fmt="diffrax")
+system = OdeSystem.from_sbml("BIOMD0000000012_urn.xml")
+system.write("repressilator_diffrax.py", fmt="diffrax")
 ```
 
 ```python
@@ -182,7 +186,7 @@ import jax.numpy as jnp
 from repressilator_diffrax import P0, simulate, to_frame
 
 ts = jnp.linspace(0.0, 1000.0, 201)
-simulation = simulate(ts)  # the output times t, the states x, the assigned values y, the constants p
+simulation = simulate(ts)  # the times t, states x, assigned values y, constants p
 table = to_frame(simulation)  # a pandas DataFrame, outside of jax.jit
 
 # a simulation for each row of the constants
@@ -197,7 +201,8 @@ def loss(p):
 
 gradient = jax.grad(loss)(P0)
 # forward mode, with the adjoint of diffrax for it
-jacobian = jax.jacfwd(lambda p: simulate(ts, p, adjoint=diffrax.ForwardMode()).x[-1])(P0)
+forward = diffrax.ForwardMode()
+jacobian = jax.jacfwd(lambda p: simulate(ts, p, adjoint=forward).x[-1])(P0)
 ```
 
 `simulate(ts, p=None, x0=None, *, rtol=1e-8, atol=1e-10, solver=None, adjoint=None, max_step=None, max_steps=None)` integrates the model with `diffrax.diffeqsolve` from $t = 0$ to the last of the output times `ts`, which do not decrease, and returns a `Simulation`, a named tuple of the output times `t`, the states `x`, the assigned values `y` and the constants `p`, a row per output time. `equinox.filter_jit` compiles it for the number of output times and the options; the output times, the constants and the initial states are traced, so that a simulation with other values runs without a compilation. The solver is `diffrax.Kvaerno5()` by default, an implicit solver for stiff models, with a `diffrax.PIDController` of the tolerances and of the largest step, the distance of the output times; `diffrax.Tsit5()` is faster for a model which is not stiff. `adjoint` decides how the simulation is differentiated, as it does for `diffeqsolve`: `diffrax.RecursiveCheckpointAdjoint()`, the default, for reverse mode (`jax.grad`), `diffrax.ForwardMode()` for forward mode (`jax.jvp`, `jax.jacfwd`), `diffrax.DirectAdjoint()` for both, at a longer compilation. An error of a simulation, e.g. output times which decrease or more than `max_steps` steps, is raised from inside `jax.jit` as a `RuntimeError`, `equinox.EquinoxRuntimeError`.
@@ -494,8 +499,8 @@ A curated subset of 67 cases, which covers every construct of SBML core, runs in
 `scripts/ode_report.py` runs the sweep, every case in a process of its own, and prints this table:
 
 ```bash
-uv run python scripts/ode_report.py                                             # python
-uv run python scripts/ode_report.py --format diffrax --format julia --format r  # the others
+uv run python scripts/ode_report.py  # python
+uv run python scripts/ode_report.py --format diffrax --format julia --format r
 ```
 
 <div class="doc-rendered" markdown>
