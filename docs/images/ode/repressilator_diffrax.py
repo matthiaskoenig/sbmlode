@@ -25,9 +25,9 @@ States x:
 `f_dxdt(t, x, p)` the rates of change of the states and `f_y(t, x, p)` the assigned
 values y, the rules and the reaction rates. They are functions of JAX: `jax.jit`
 compiles them, `jax.vmap` maps them over arrays and `jax.grad` differentiates them.
-`simulate(ts)` integrates the model with diffrax and returns the states, the assigned
-values and the constants at the output times ts, `to_frame` a table of them, the file
-run as a script prints the head of a simulation:
+`simulate(ts)` integrates the model with diffrax, it
+returns the states, the assigned values and the constants at the output times ts,
+`to_frame` a table of them, the file run as a script prints the head of a simulation:
 
     ts = jnp.linspace(0.0, 10.0, 101)
     simulation = simulate(ts)
@@ -316,7 +316,8 @@ class Simulation(NamedTuple):
     p: jax.Array  # the constants, a column per id of PIDS
 
 
-# the limit of the steps of an integration beyond those which the largest step forces
+# the limits of a simulation: the steps of an integration beyond those which the largest
+# step forces
 MAX_STEPS = 100000
 
 
@@ -353,8 +354,8 @@ def simulate(
             (`jax.jacfwd`), `diffrax.DirectAdjoint()` for both
         max_step: the largest step of the integration, by default the distance of
             the output times, `ts[-1] / (len(ts) - 1)`
-        max_steps: the largest number of steps of the integration, by default
-            `MAX_STEPS` plus twice the number of output times
+        max_steps: the largest number of steps of the integration, by
+            default `MAX_STEPS` plus twice the number of output times
 
     Returns:
         the time, the states, the assigned values and the constants at the output

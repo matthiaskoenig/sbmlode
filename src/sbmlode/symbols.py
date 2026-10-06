@@ -168,6 +168,21 @@ _GENERATED: dict[str, set[str]] = {
         "ts", "rtol", "atol", "solver", "adjoint", "max_step", "max_steps",
         "x_initial", "points", "t_end", "solution", "xs", "ys", "ps", "data",
         "columns", "constants", "simulation", "controller",
+        # the events
+        "partial", "EVENT_IDS", "INITIAL_VALUE", "PERSISTENT", "USE_TRIGGER_VALUES",
+        "MAX_CASCADE", "ROOT_TOLERANCE", "ROOT_WINDOW", "Queue", "State",
+        "event_triggers", "event_conditions", "event_delay", "event_priorities",
+        "event_values", "event_assign", "loop_kind", "vector_field", "trigger_change",
+        "first_change", "execute_events", "max_segments", "max_pending", "kind",
+        "event", "event_index", "index", "values", "sizes", "args", "kwargs",
+        "dx", "changed", "change", "bisect", "bounds", "window", "early", "late",
+        "t_low", "t_high", "t_middle", "t_after", "t_point", "turned", "roots",
+        "root", "at_root", "t_change", "slots", "slot", "put", "schedule", "free",
+        "here", "queue", "time", "use_values", "order", "scheduled", "cascade",
+        "holds", "holds_now", "dropped", "drop", "due", "priority", "first",
+        "executed", "x_new", "p_new", "done", "executions", "state", "integrate",
+        "t_stop", "t_root", "x_root", "offset", "t_next", "x_next", "t_points",
+        "inside", "x_points", "filled", "segments", "after",
     },
     # the names of `resources/converters/ode/julia.jl.jinja`: the packages, the
     # names it imports, its functions, their arguments and locals

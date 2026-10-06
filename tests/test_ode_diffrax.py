@@ -8,15 +8,20 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
+import libsbml
 import numpy as np
+import pandas as pd
 import pytest
 from ode_helpers import (
+    EVENT_MODELS,
     FORMULAS,
+    TWO_EVENTS,
     assert_diffrax_as_roadrunner,
     assert_diffrax_trajectory_as_roadrunner,
     assert_table_as_roadrunner,
     diffrax_frame,
     diffrax_module,
+    edit_sbml,
     model_sbml,
     sbml_with_rate,
 )
@@ -27,6 +32,7 @@ from resources import (
     GALACTOSE_SINGLECELL_SBML,
     MODELS_DIR,
     REPRESSILATOR_SBML,
+    VARIABLE_COMPARTMENT,
     VDP_SBML,
 )
 
@@ -226,12 +232,12 @@ def _loss(
 
 
 def _finite_differences(
-    function: Callable[[jax.Array], jax.Array], p: np.ndarray
+    function: Callable[[jax.Array], jax.Array], p: np.ndarray, step: float = 1e-6
 ) -> np.ndarray:
-    """The gradient of a function by central differences."""
+    """The gradient of a function by central differences of the relative step."""
     gradient = []
     for k in range(len(p)):
-        h = 1e-6 * max(1.0, abs(float(p[k])))
+        h = step * max(1.0, abs(float(p[k])))
         e = np.zeros(len(p))
         e[k] = h
         gradient.append((function(p + e) - function(p - e)) / (2 * h))
@@ -301,6 +307,326 @@ def test_diffrax_functions_without_simulator(tmp_path: Path) -> None:
     assert solution.ys[-1, 0] == pytest.approx(2.0 * np.exp(-k * 3.0), rel=1e-8)
 
 
+# --- events ---------------------------------------------------------------------------
+
+EVENT_RTOL = 1e-4
+EVENT_ATOL = 1e-6
+
+# a dose whenever A falls below thr, a delayed event of a strict trigger, a
+# non-persistent event which its trigger drops and an event which changes a constant:
+# the event times depend on the constants
+DOSES = """
+    A = 3; B = 1
+    k = 0.5; thr = 1; dose = 2; d = 0.55; kb = 0.2; thr2 = 2.8
+    A' = -k * A
+    B' = -kb * B
+    E0: at A < thr: A = A + dose
+    E1: at d after time > 1, fromTrigger=false: B = B + 1
+    E2: at 0.3 after A > thr2, persistent=false, fromTrigger=true: B = B + 10
+    E3: at time >= 2: kb = 2 * kb
+"""
+
+
+def _assert_events_as_roadrunner(antimony: str, tmp_path: Path) -> pd.DataFrame:
+    """Assert that a model with events simulates as roadrunner.
+
+    Returns:
+        the simulation of the generated diffrax code
+    """
+    sbml = model_sbml(antimony)
+    system = OdeSystem.from_sbml(sbml)
+    assert system.events
+    module = diffrax_module(system, tmp_path / "events.py")
+    df = diffrax_frame(module)
+    assert_table_as_roadrunner(sbml, df, rtol=EVENT_RTOL, atol=EVENT_ATOL)
+    return df
+
+
+@pytest.mark.parametrize(
+    "name", [name for name in EVENT_MODELS if name != "infinite_cascade"]
+)
+def test_diffrax_events_as_roadrunner(name: str, tmp_path: Path) -> None:
+    """Every model with events of the numerical formats simulates as roadrunner."""
+    _assert_events_as_roadrunner(EVENT_MODELS[name], tmp_path)
+
+
+def test_diffrax_doses_as_roadrunner(tmp_path: Path) -> None:
+    """Repeated doses, delays and a dropped execution simulate as roadrunner."""
+    df = _assert_events_as_roadrunner(DOSES, tmp_path)
+    assert list(df.columns) == ["time", "A", "B", "kb"]
+    assert df["kb"].iloc[-1] == 0.4
+    # the delayed execution of the strict trigger is after the output time 1.55
+    row = df[np.isclose(df["time"], 1.6)].iloc[0]
+    assert row["B"] == pytest.approx(np.exp(-0.2 * 1.6) + np.exp(-0.2 * 0.05))
+
+
+def test_diffrax_two_events(tmp_path: Path) -> None:
+    """Events with a delay and priorities, a constant which an event changes."""
+    df = _assert_events_as_roadrunner(TWO_EVENTS, tmp_path)
+    assert list(df.columns) == ["time", "S", "R1", "k", "total"]
+    assert df["k"].iloc[-1] == 1.0
+    assert df["total"].iloc[-1] >= 2
+
+
+@pytest.mark.parametrize("relation", [">=", ">"])
+def test_diffrax_event_at_t0(relation: str, tmp_path: Path) -> None:
+    """A trigger which holds at t = 0 fires there if its initial value is false."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS[f"at_t0[{relation}]"], tmp_path)
+    fired = 1.0 if relation == ">=" else 0.0
+    assert df["B"].iloc[0] == fired
+    assert df["B"].iloc[-1] == 1.0
+    assert df["C"].iloc[-1] == 1.0 - fired
+    assert df["D"].iloc[-1] == 3.0
+
+
+@pytest.mark.parametrize(("relation", "before"), [(">=", False), (">", True)])
+def test_diffrax_event_at_a_time_point(
+    relation: str, before: bool, tmp_path: Path
+) -> None:
+    """At an output time the values are those after its events.
+
+    `time >= 2` fires at t = 2, `time > 2` right after it, so that the output time
+    t = 2 has the values before the event.
+    """
+    df = _assert_events_as_roadrunner(
+        EVENT_MODELS[f"at_time_point[{relation}]"], tmp_path
+    )
+    row = df[np.isclose(df["time"], 2.0)].iloc[0]
+    assert row["A"] == pytest.approx(2.0 if before else 10.0)
+
+
+def test_diffrax_event_at_a_time_point_to_the_rounding(tmp_path: Path) -> None:
+    """An execution at an output time to the rounding of the integration is at it."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["rounding"], tmp_path)
+    assert df[np.isclose(df["time"], 3.4)]["B"].iloc[0] == 1.0
+
+
+def test_diffrax_event_priority(tmp_path: Path) -> None:
+    """Events at the same time execute in the order of their priorities."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["priority"], tmp_path)
+    assert df[np.isclose(df["time"], 2.0)]["B"].iloc[0] == 4.0
+    assert df["B"].iloc[-1] == 17.0
+
+
+def test_diffrax_event_delay(tmp_path: Path) -> None:
+    """A delayed event executes after its delay, each time its trigger turns true."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["delay"], tmp_path)
+    assert df["n"].iloc[-1] == 4.0
+    assert df["d"].iloc[-1] == 0.5
+    assert df["S"].iloc[-1] == pytest.approx(4.831581402482879, rel=1e-6)
+
+
+def test_diffrax_event_use_values_from_trigger_time(tmp_path: Path) -> None:
+    """The values of a delayed event are from the trigger time or the execution."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["trigger_values"], tmp_path)
+    assert df["B"].iloc[-1] == pytest.approx(1.0)
+    assert df["C"].iloc[-1] == pytest.approx(3.0)
+
+
+def test_diffrax_event_persistent(tmp_path: Path) -> None:
+    """An event which is not persistent is dropped if its trigger turns false."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["persistent"], tmp_path)
+    assert df["B"].iloc[-1] == 0.0
+    assert df["C"].iloc[-1] == 1.0
+    assert df["F"].iloc[-1] == 1.0
+
+
+def test_diffrax_event_changes_compartment(tmp_path: Path) -> None:
+    """An event which changes a size keeps the amounts of its species."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["compartment"], tmp_path)
+    assert df["V"].iloc[-1] == 0.5
+    row = df[np.isclose(df["time"], 2.2)].iloc[0]
+    assert row["S"] == pytest.approx(0.8025187974297124, rel=1e-6)
+    assert row["T"] == pytest.approx(0.62, rel=1e-6)
+    assert df["S"].iloc[-1] == pytest.approx(7.278367917708202, rel=1e-6)
+    assert df["T"].iloc[-1] == pytest.approx(4.1, rel=1e-6)
+
+
+def test_diffrax_event_cascade(tmp_path: Path) -> None:
+    """An execution which makes another trigger true fires it at the same time."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["cascade"], tmp_path)
+    assert df["B"].iloc[-1] == 1.0
+    assert df[np.isclose(df["time"], 1.2)]["B"].iloc[0] == 1.0
+
+
+def test_diffrax_event_assigns_its_threshold(tmp_path: Path) -> None:
+    """An event which sets its trigger to the root keeps integrating."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["threshold"], tmp_path)
+    assert df["A"].between(1.0, 2.0).all()
+    assert df["A"].iloc[-1] == pytest.approx(1.5)
+
+
+def test_diffrax_event_model_without_states(tmp_path: Path) -> None:
+    """A model of events and rules only integrates nothing but its events."""
+    df = _assert_events_as_roadrunner(EVENT_MODELS["without_states"], tmp_path)
+    assert list(df.columns) == ["time", "y", "B"]
+    assert df["B"].iloc[-1] == 5.0
+
+
+def _swelling(model: libsbml.Model) -> None:
+    """An event at t = 1 which doubles the parameter `Va0` of the rule of `Va`."""
+    event: libsbml.Event = model.createEvent()
+    event.setId("swell")
+    event.setUseValuesFromTriggerTime(True)
+    trigger: libsbml.Trigger = event.createTrigger()
+    trigger.setInitialValue(True)
+    trigger.setPersistent(True)
+    trigger.setMath(libsbml.parseL3Formula("time > 1"))
+    assignment: libsbml.EventAssignment = event.createEventAssignment()
+    assignment.setVariable("Va0")
+    assignment.setMath(libsbml.parseL3Formula("2 * Va0"))
+
+
+@pytest.mark.parametrize("swelling", [False, True])
+def test_diffrax_variable_compartments(swelling: bool, tmp_path: Path) -> None:
+    """Sizes of a rate rule, an assignment rule and events simulate as roadrunner.
+
+    The event `swell` changes a parameter of the rule of the size `Va`, the amount of
+    `S2` in it is kept.
+    """
+    sbml = VARIABLE_COMPARTMENT.read_text()
+    if swelling:
+        sbml = edit_sbml(sbml, _swelling)
+    assert_diffrax_as_roadrunner(sbml, tmp_path)
+    module = diffrax_module(OdeSystem.from_sbml(sbml), tmp_path / "v.py")
+    df = diffrax_frame(module)
+    assert_table_as_roadrunner(sbml, df, rtol=EVENT_RTOL, atol=EVENT_ATOL)
+
+
+def test_diffrax_event_infinite_cascade_raises(tmp_path: Path) -> None:
+    """Events which trigger each other at one time without end raise."""
+    module = _module(EVENT_MODELS["infinite_cascade"], tmp_path)
+    assert module.MAX_CASCADE == 10000
+    with pytest.raises(RuntimeError, match="infinite cascade"):
+        module.simulate(jnp.linspace(0.0, 2.0, 11))
+
+
+@pytest.mark.parametrize("event", ["", "; E1: at time > 5: x = 2"])
+def test_diffrax_raises_for_a_state_without_bound(event: str, tmp_path: Path) -> None:
+    """A state which grows without bound raises, it does not integrate for ever.
+
+    `x' = x^2` with `x(0) = 1` is `1 / (1 - t)`, which has a pole at t = 1.
+    """
+    module = _module(f"x = 1; x' = x^2{event}", tmp_path)
+    with pytest.raises(RuntimeError):
+        module.simulate(jnp.linspace(0.0, 2.0, 11))
+
+
+def test_diffrax_max_pending(tmp_path: Path) -> None:
+    """More scheduled executions than `max_pending` raise.
+
+    The trigger turns true every 2 pi / 10, its executions are 5 later: 8 of them are
+    scheduled at a time.
+    """
+    module = _module("B = 0; E1: at 5 after sin(10 * time) > 0.5: B = B + 1", tmp_path)
+    ts = jnp.linspace(0.0, 10.0, 101)
+    assert module.simulate(ts).x.shape == (101, 0)
+    with pytest.raises(RuntimeError, match="max_pending"):
+        module.simulate(ts, max_pending=4)
+
+
+def test_diffrax_max_segments(tmp_path: Path) -> None:
+    """More segments of the integration than `max_segments` raise."""
+    module = _module(EVENT_MODELS["delay"], tmp_path)
+    with pytest.raises(RuntimeError, match="3 segments"):
+        module.simulate(jnp.linspace(0.0, 10.0, 11), max_segments=3)
+
+
+def test_diffrax_trigger_within_a_step(tmp_path: Path) -> None:
+    """A trigger is found at the end of a step, which is at most `max_step`.
+
+    The trigger of `window` holds from t = 1 to 1.5, which the steps of the output
+    times, 0.2, find. A trigger from t = 1.01 to 1.06 is stepped over by them and
+    found by steps of at most 0.01.
+    """
+    ts = jnp.linspace(0.0, 4.0, 21)
+    module = _module(EVENT_MODELS["window"], tmp_path)
+    assert module.simulate(ts).p[-1, module.PIDS.index("B")] == 1.0
+    short = diffrax_module(
+        _system("B = 0; E1: at time > 1.01 && time < 1.06: B = B + 1"),
+        tmp_path / "short.py",
+    )
+    index = short.PIDS.index("B")
+    assert short.simulate(ts).p[-1, index] == 0.0
+    assert short.simulate(ts, max_step=0.01).p[-1, index] == 1.0
+
+
+@pytest.mark.parametrize("antimony", [EVENT_MODELS["rounding"], "S = 1; S' = -S"])
+def test_diffrax_simulate_without_time(antimony: str, tmp_path: Path) -> None:
+    """Output times at t = 0 only are the initial states, after the events at 0."""
+    module = _module(antimony, tmp_path)
+    x0, _ = module.initial_values()
+    simulation = module.simulate(jnp.zeros(5))
+    assert np.array_equal(simulation.x, np.broadcast_to(x0, (5, len(x0))))
+
+
+def test_diffrax_events_without_simulator(tmp_path: Path) -> None:
+    """`simulator=False` writes the functions of the events for a solver of one's own."""
+    module = _module(TWO_EVENTS, tmp_path, simulator=False)
+    assert not hasattr(module, "simulate")
+    assert module.EVENT_IDS == ["E1", "E2"]
+    x, p = module.initial_values()
+    assert module.event_triggers(0.0, x, p).tolist() == [-5.0, -3.0]
+    assert module.event_conditions(0.0, x, p).tolist() == [False, False]
+    assert module.event_delay(0, 0.0, x, p) == 1.0
+    assert module.event_delay(1, 0.0, x, p) == 0.0
+    assert module.event_priorities(0.0, x, p).tolist() == [2.0, 1.0]
+    values = module.event_values(0, 0.0, x, p)
+    x_new, p_new = module.event_assign(0, 0.0, x, p, values)
+    assert x_new[module.XIDS.index("S")] == 15.0
+    assert p_new[module.PIDS.index("total")] == 1.0
+    assert x[module.XIDS.index("S")] == 10.0
+
+
+def test_model_without_events_has_no_events(tmp_path: Path) -> None:
+    """The code of a model without events has no functions of events."""
+    module = _module(DECAY, tmp_path)
+    assert not hasattr(module, "EVENT_IDS")
+    assert "event_triggers" not in (tmp_path / "model.py").read_text()
+
+
+def test_diffrax_events_vmap(tmp_path: Path) -> None:
+    """`jax.vmap` over the constants of a model with events, whose times differ."""
+    module = _module(DOSES, tmp_path)
+    ts = jnp.linspace(0.0, 10.0, 51)
+    ps = module.P0[None, :] * jnp.linspace(0.8, 1.2, 5)[:, None]
+    xs = jax.vmap(lambda p: module.simulate(ts, p).x)(ps)
+    for k in (0, 2, 4):
+        assert np.allclose(xs[k], module.simulate(ts, ps[k]).x, rtol=1e-10, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("adjoint", "transform"),
+    [
+        ("RecursiveCheckpointAdjoint", "grad"),
+        ("ForwardMode", "jacfwd"),
+        ("DirectAdjoint", "grad"),
+    ],
+)
+def test_diffrax_events_gradient(adjoint: str, transform: str, tmp_path: Path) -> None:
+    """The derivative of a simulation with events is its derivative by differences.
+
+    The times of the doses depend on `k`, `thr` and `dose`, the time of the delayed
+    execution on `d`: the derivative includes the shift of the event times. The
+    derivative is the one of the integration with its steps, the differences change
+    the steps as well, which a small step of the differences amplifies: at the
+    tolerances of the reference and a step of 1e-4 both are the derivative of the
+    solution.
+    """
+    module = _module(DOSES, tmp_path)
+    # output times which no event time is near, the loss is smooth in the constants
+    ts = jnp.linspace(0.0, 10.0, 21)
+    loss = _loss(
+        module, ts, adjoint=getattr(diffrax, adjoint)(), rtol=1e-10, atol=1e-12
+    )
+    gradient = np.asarray(getattr(jax, transform)(loss)(module.P0))
+    expected = _finite_differences(loss, np.asarray(module.P0), step=1e-4)
+    # `thr2` changes the loss only by the integration, its event is always dropped
+    for k, pid in enumerate(module.PIDS):
+        if pid != "thr2":
+            assert gradient[k] == pytest.approx(expected[k], rel=1e-5), pid
+
+
 # --- the code -------------------------------------------------------------------------
 
 
@@ -346,7 +672,11 @@ def test_diffrax_layout() -> None:
     assert not code.endswith("\n\n")
 
 
-@pytest.mark.parametrize("antimony", [RULES, DECAY], ids=["rules", "decay"])
+@pytest.mark.parametrize(
+    "antimony",
+    [RULES, DECAY, TWO_EVENTS, DOSES, EVENT_MODELS["without_states"]],
+    ids=["rules", "decay", "events", "doses", "stateless"],
+)
 def test_diffrax_names_are_reserved(antimony: str) -> None:
     """Every name the code writes, apart from the ids, is reserved for JAX."""
     system = _system(antimony)
@@ -379,7 +709,11 @@ def test_diffrax_names_are_reserved(antimony: str) -> None:
     importlib.util.find_spec("ruff") is None, reason="ruff is not installed"
 )
 @pytest.mark.parametrize("simulator", [True, False])
-@pytest.mark.parametrize("antimony", [RULES, DECAY, "k = 2; y := k * time"])
+@pytest.mark.parametrize(
+    "antimony",
+    [RULES, DECAY, "k = 2; y := k * time", TWO_EVENTS, EVENT_MODELS["without_states"]],
+    ids=["rules", "decay", "rule", "events", "stateless"],
+)
 def test_diffrax_code_passes_ruff(antimony: str, simulator: bool) -> None:
     """The generated diffrax code passes `ruff check` with the default rules."""
     code = _system(antimony).render("diffrax", simulator=simulator)
