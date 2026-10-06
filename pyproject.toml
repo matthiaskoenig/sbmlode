@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sbmlode"
+dynamic = ["version"]
+description = "sbmlode writes the ordinary differential equations of SBML models as python, julia and R code and as LaTeX, typst and markdown documents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Matthias König", email = "konigmatt@googlemail.com" }]
+maintainers = [{ name = "Matthias König", email = "konigmatt@googlemail.com" }]
+classifiers = [
+	"Development Status :: 4 - Beta",
+	"Intended Audience :: Science/Research",
+	"Operating System :: OS Independent",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Programming Language :: Python :: 3.13",
+	"Programming Language :: Python :: 3.14",
+	"Programming Language :: Python :: 3.15",
+	"Programming Language :: Python :: Implementation :: CPython",
+	"Topic :: Scientific/Engineering",
+	"Topic :: Scientific/Engineering :: Bio-Informatics",
+	"Typing :: Typed",
+]
+keywords = [
+	"SBML",
+	"Systems Biology Markup Language",
+	"ODE",
+	"ordinary differential equations",
+	"code generation",
+	"computational modeling",
+]
+dependencies = [
+	"python-libsbml>=5.21.2",
+	"jinja2>=3.1.6",
+]
+
+[project.optional-dependencies]
+# what the tests need beyond the package: models written in antimony, the python
+# simulator the export writes (scipy), the reference simulations of the SBML test
+# suite (libroadrunner) and the compilation of typst
+test = [
+	"pytest>=9.1.1",
+	"antimony>=3.1.3",
+	# the win_amd64 wheel of antimony 3.2.0 raises a C++ exception in loadAntimonyString
+	"antimony!=3.2.0; sys_platform == 'win32'",
+	"scipy>=1.15.0",
+	"libroadrunner>=2.10.0; python_version < '3.15'",
+	"typst>=0.15.0",
+	"numpy>=2.2.2",
+	"pandas>=2.2.2",
+	"markdown-it-py>=3.0.0",
+]
+dev = [
+	"sbmlode[test]",
+	"bump-my-version>=1.5.1",
+	"ruff>=0.16.6",
+	"pre-commit>=4.6.2",
+	"ty>=0.0.79",
+	"tox>=4.61.2",
+	"tox-uv>=1.29.0",
+	"zensical>=0.0.60",
+	"mkdocstrings-python>=2.0.8",
+]
+
+[project.urls]
+Homepage = "https://matthiaskoenig.github.io/sbmlode"
+Documentation = "https://matthiaskoenig.github.io/sbmlode"
+Repository = "https://github.com/matthiaskoenig/sbmlode"
+Issues = "https://github.com/matthiaskoenig/sbmlode/issues"
+Changelog = "https://matthiaskoenig.github.io/sbmlode/release-notes/"
+Download = "https://pypi.org/project/sbmlode"
+
+[tool.hatch.version]
+path = "./src/sbmlode/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+# the package with what builds and tests it, nothing else of the repository
+only-include = [
+	"src",
+	"tests",
+	"tox.ini",
+	"lowest-overrides.txt",
+	"README.md",
+	"LICENSE",
+	"CITATION.cff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sbmlode"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# the tests import their helpers (`ode_helpers`, `testsuite`) and the scripts of
+# the repository (`scripts.docs_images`)
+pythonpath = [".", "tests"]
+markers = [
+    "sbml_testsuite: full sweep over the SBML test suite, slow; deselect with -m 'not sbml_testsuite'",
+]
+
+[tool.ty.environment]
+# the package lives in the src layout; the checked python version is inferred
+# from `project.requires-python` (i.e. the oldest supported version)
+root = ["./src", "."]
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.terminal]
+# warnings are failures: keep the codebase free of any diagnostic
+error-on-warning = true

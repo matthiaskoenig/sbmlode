@@ -1,0 +1,46 @@
+# python
+__pycache__/
+*.pyc
+
+# packaging artifacts (hatchling builds into dist/)
+dist/
+*.egg-info/
+
+# environments, tool caches
+.venv/
+.tox/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+# build cache of zensical
+.cache/
+
+# rendered documentation, built by the `documentation` workflow
+site/
+
+# py4cytoscape writes its log next to the working directory
+logs/
+
+# output of the examples, they write into the working directory
+examples/**/results/
+examples/**/_results/
+
+# scratch directories of scripts/roundtrip_report.py, package_report.py and ode_report.py
+.roundtrip_tmp/
+.package_tmp/
+.ode_tmp/
+# the pages of the typst document of docs/ode.md, compiled by the docs workflow
+docs/images/ode/*.svg
+
+# working files of coding agents
+.superpowers/
+
+# editors, operating system
+.idea/
+.vscode/
+*~
+.DS_Store
+
+# the julia environment of the tests is resolved from its Project.toml
+tests/converters/ode/julia/Manifest.toml
