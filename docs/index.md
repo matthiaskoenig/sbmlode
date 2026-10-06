@@ -45,7 +45,7 @@ The [Guide](formats.md) describes the formats, their options, the supported SBML
 
 If you use sbmlode please cite the archived software on [Zenodo](https://doi.org/10.5281/zenodo.23179199):
 
-> König, M. (2026). *sbmlode: ordinary differential equations of SBML models* (Version 0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23179200
+> König, M. (2026). *sbmlode: ordinary differential equations of SBML models* (Version 0.2.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23184677
 
 ```bibtex
 @software{koenig_sbmlode,
@@ -53,10 +53,10 @@ If you use sbmlode please cite the archived software on [Zenodo](https://doi.org
   title     = {sbmlode: ordinary differential equations of SBML models},
   year      = {2026},
   month     = oct,
-  version   = {0.1.0},
+  version   = {0.2.0},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.23179200},
-  url       = {https://doi.org/10.5281/zenodo.23179200},
+  doi       = {10.5281/zenodo.23184677},
+  url       = {https://doi.org/10.5281/zenodo.23184677},
 }
 ```
 
