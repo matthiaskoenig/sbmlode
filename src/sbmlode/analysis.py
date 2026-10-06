@@ -6,14 +6,18 @@ per element and rule.
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
 import libsbml
 
 from sbmlode.astutil import (
+    TIME,
+    derivative,
     drop_zero_terms,
+    is_number,
+    multiply,
     name,
     node,
     number,
@@ -33,10 +37,12 @@ from sbmlode.system import (
     ModelInfo,
     Ode,
     OdeSystem,
+    Origin,
     Participant,
     Quantity,
     Reaction,
     Role,
+    SizeRate,
     Symbol,
 )
 from sbmlode.units import udef_to_string
@@ -218,19 +224,6 @@ def _term(
     return sign, product(factors)
 
 
-def _with_amounts(
-    species: Sequence[Quantity], amounts: Sequence[Quantity]
-) -> list[Quantity]:
-    """The species, each followed by its amount if it is held as amount."""
-    amount_of = {amount.amount_of: amount for amount in amounts}
-    return [
-        quantity
-        for s in species
-        for quantity in (s, amount_of.get(s.symbol.sid))
-        if quantity is not None
-    ]
-
-
 def _ordered(assignments: list[Assignment]) -> tuple[Assignment, ...]:
     """The assignments in the order of their dependencies."""
     by_variable = {a.variable: a for a in assignments}
@@ -276,12 +269,20 @@ class _Analysis:
             for assignment in event.getListOfEventAssignments()
         }
         self._read_rules()
-        # the quantities and reactions by id, the amount of each species held as
-        # amount, the conversion factor of each species, the right hand side of
-        # each state as read and with its rateOf resolved
+        # the quantities and reactions by id, the rate of each reaction, the species
+        # in concentration diluted alone, the symbol of the rate of each size, the
+        # conversion factor of each species, the right hand side of each state as
+        # read and with its rateOf resolved
         self.quantities: dict[str, Quantity] = {}
         self.reaction_ids: set[str] = set()
-        self.amounts: dict[str, str] = {}
+        self.reaction_rates: dict[str, libsbml.ASTNode] = {}
+        self.reaction_ids_read: set[str] = {
+            reaction.getId() for reaction in self.model.getListOfReactions()
+        }
+        self.diluted: set[str] = set()
+        self.reacting: set[str] = set()
+        self.continuous: dict[str, bool] = {}
+        self.size_rates: dict[str, Symbol] = {}
         self.factors: dict[str, str] = {}
         self.rhs: dict[str, libsbml.ASTNode] = {}
         self.resolved: dict[str, libsbml.ASTNode] = {}
@@ -403,7 +404,7 @@ class _Analysis:
             )
             for c in self.model.getListOfCompartments()
         ]
-        species, amounts = self._read_species(reactions)
+        species = self._read_species(reactions)
         parameters = [
             self._quantity(
                 p,
@@ -414,12 +415,7 @@ class _Analysis:
             for p in self.model.getListOfParameters()
         ]
         parameters.extend(local_parameters)
-        quantities = [
-            *compartments,
-            *_with_amounts(species, amounts),
-            *parameters,
-            *references,
-        ]
+        quantities = [*compartments, *species, *parameters, *references]
         self.quantities = {q.symbol.sid: q for q in quantities}
         self.reaction_ids = {r.symbol.sid for r in reactions}
         odes = self._build_odes(quantities, reactions)
@@ -430,19 +426,25 @@ class _Analysis:
         reactions = [
             replace(r, rate=self._resolve(r.rate, r.symbol.sid)) for r in reactions
         ]
+        self.reaction_rates = {r.symbol.sid: r.rate for r in reactions}
+        rules = {
+            sid: self._resolve(ast, sid) for sid, ast in self.assignment_rules.items()
+        }
+        events = self._read_events()
+        size_rates = self._build_size_rates()
         return OdeSystem(
             info=self._read_info(),
             compartments=tuple(compartments),
             species=tuple(species),
-            amounts=tuple(amounts),
             parameters=tuple(parameters),
             species_references=tuple(references),
             functions=tuple(functions),
-            assignments=self._build_assignments(amounts, reactions),
-            initial=self._build_initial(quantities, reactions),
+            size_rates=size_rates,
+            assignments=self._build_assignments(size_rates, rules, reactions),
+            initial=self._build_initial(quantities, reactions, size_rates),
             reactions=tuple(reactions),
             odes=tuple(odes),
-            events=tuple(self._read_events()),
+            events=tuple(events),
             unsupported=tuple(self.unsupported),
         )
 
@@ -594,13 +596,16 @@ class _Analysis:
         single = _SINGLE_UNIT.fullmatch(volume) is not None
         return substance, f"{substance}/{volume if single else f'({volume})'}"
 
-    def _read_species(
-        self, reactions: list[Reaction]
-    ) -> tuple[list[Quantity], list[Quantity]]:
-        """The species and the amounts of the species held as amount."""
+    def _read_species(self, reactions: list[Reaction]) -> list[Quantity]:
+        """The species, each in the quantity the model declares.
+
+        A species in concentration in a compartment whose size changes continuously
+        which would be no state (a boundary, constant or not reacting species) is a
+        state diluted alone, see `self.diluted`.
+        """
         reacting = {p.species for r in reactions for p in (*r.reactants, *r.products)}
+        self.reacting = reacting
         species_list: list[Quantity] = []
-        amounts: list[Quantity] = []
         species: libsbml.Species
         for species in self.model.getListOfSpecies():
             sid, cid = species.getId(), species.getCompartment()
@@ -612,7 +617,7 @@ class _Analysis:
                     f"its amount and its concentration."
                 )
             boundary, constant = species.getBoundaryCondition(), species.getConstant()
-            substance, unit = self._species_unit(species)
+            _, unit = self._species_unit(species)
             factor = species.getConversionFactor() or self.model.getConversionFactor()
             if factor:
                 self.factors[sid] = factor
@@ -626,38 +631,12 @@ class _Analysis:
                 if sid in reacting and not boundary and not constant
                 else "constant"
             )
-            variable_size = self._role(cid) != "constant" or cid in self.event_variables
             if sid in self.assignment_rules or sid in self.rate_rules:
                 role = self._role(sid)
-            elif not in_amount and variable_size:
-                # held as amount, the concentration is assigned
-                aid = self._unique(f"n_{sid}")
-                self.amounts[sid] = aid
-                amounts.append(
-                    Quantity(
-                        symbol=Symbol(
-                            aid,
-                            f"amount of {species.getName() or sid}",
-                            substance,
-                            None,
-                            "species",
-                            (sid,),
-                        ),
-                        value=(
-                            species.getInitialAmount()
-                            if species.isSetInitialAmount()
-                            else None
-                        ),
-                        constant=constant,
-                        role=role,
-                        compartment=cid,
-                        amount=True,
-                        boundary=boundary,
-                        conversion_factor=factor or None,
-                        amount_of=sid,
-                    )
-                )
-                role = "assigned"
+            elif not in_amount and role != "state" and self._continuous(cid):
+                # roadrunner keeps the amount, the concentration is diluted
+                role = "state"
+                self.diluted.add(sid)
             species_list.append(
                 Quantity(
                     symbol=self._symbol(species, "species", unit),
@@ -670,7 +649,7 @@ class _Analysis:
                     conversion_factor=factor or None,
                 )
             )
-        return species_list, amounts
+        return species_list
 
     # --- the odes -----------------------------------------------------------------
 
@@ -695,16 +674,35 @@ class _Analysis:
             if sid in self.rate_rules:
                 ode = Ode(sid, self.rate_rules[sid], "rate_rule")
             elif quantity.amount:
-                reaction_terms = signed_sum(terms[quantity.amount_of or sid])
-                rhs = reaction_terms.deepCopy()
-                ode = Ode(
-                    sid, rhs, "reactions", reaction_terms, None, quantity.amount_of
-                )
-            else:
                 reaction_terms = signed_sum(terms[sid])
+                ode = Ode(sid, reaction_terms.deepCopy(), "reactions", reaction_terms)
+            else:
                 cid = str(quantity.compartment)
-                rhs = node(libsbml.AST_DIVIDE, reaction_terms.deepCopy(), name(cid))
-                ode = Ode(sid, rhs, "reactions", reaction_terms, cid)
+                rate = self._size_rate(cid)
+                dilution = (
+                    None
+                    if rate is None
+                    else node(
+                        libsbml.AST_TIMES,
+                        node(libsbml.AST_DIVIDE, name(sid), name(cid)),
+                        name(rate),
+                    )
+                )
+                if sid in self.diluted:
+                    # `-(S/V) dV/dt`, the sign in front of the dilution
+                    rhs = node(libsbml.AST_MINUS, dilution) if dilution else number(0.0)
+                    ode = Ode(sid, rhs, "dilution", None, cid, rate)
+                else:
+                    reaction_terms = signed_sum(terms[sid])
+                    divided = node(
+                        libsbml.AST_DIVIDE, reaction_terms.deepCopy(), name(cid)
+                    )
+                    rhs = (
+                        divided
+                        if dilution is None
+                        else signed_sum([(1, divided), (-1, dilution)])
+                    )
+                    ode = Ode(sid, rhs, "reactions", reaction_terms, cid, rate)
             self.rhs[sid] = ode.rhs
             odes.append(ode)
         return odes
@@ -727,22 +725,6 @@ class _Analysis:
         """The rate of change of an id, `None` if it is unsupported."""
         if sid in self.rhs:
             return self._resolved_rate(sid, element, stack)
-        if sid in self.amounts:
-            # the concentration of an amount: d(n/V)/dt = (dn/dt - S dV/dt) / V
-            aid, cid = self.amounts[sid], str(self.quantities[sid].compartment)
-            if cid in self.assignment_rules:
-                self._unsupported("rateOf of an assigned variable", element)
-                return None
-            rate = self._resolved_rate(aid, element, stack) if aid in self.rhs else None
-            if cid in self.rhs:
-                size_rate = self._resolved_rate(cid, element, stack)
-                dilution = node(libsbml.AST_TIMES, name(sid), size_rate)
-                rate = signed_sum(
-                    [*([] if rate is None else [(1, rate)]), (-1, dilution)]
-                )
-            if rate is None:
-                return number(0.0)
-            return node(libsbml.AST_DIVIDE, rate, name(cid))
         quantity = self.quantities.get(sid)
         if quantity is None and sid not in self.reaction_ids:
             raise ValueError(
@@ -750,6 +732,10 @@ class _Analysis:
             )
         if quantity is not None and quantity.role == "constant":
             return number(0.0)
+        if quantity is not None and quantity.symbol.kind == "compartment":
+            # the size of a compartment with an assignment rule
+            rate = self._size_rate(sid)
+            return number(0.0) if rate is None else name(rate)
         self._unsupported("rateOf of an assigned variable", element)
         return None
 
@@ -792,28 +778,167 @@ class _Analysis:
 
     # --- assignments and initial values -------------------------------------------
 
+    # --- the rates of the sizes ----------------------------------------------------
+
+    def _continuous(self, sid: str, stack: frozenset[str] = frozenset()) -> bool:
+        """Check that a variable changes continuously in time.
+
+        A variable with a rate rule, a species which is a state by its reactions, a
+        species in concentration in a compartment which changes continuously, and a
+        variable with an assignment rule which uses the time or one of these,
+        through other assignment rules and reaction rates. A size with an assignment
+        rule of constants only, e.g. `V = BW * f`, is constant between the events.
+        """
+        if sid in self.continuous:
+            return self.continuous[sid]
+        if sid in stack:
+            return False
+        stack = stack | {sid}
+        result = False
+        species: libsbml.Species | None = self.model.getSpecies(sid)
+        math = self.assignment_rules.get(sid)
+        if sid in self.rate_rules:
+            result = True
+        elif math is not None or sid in self.reaction_ids_read:
+            if math is None:
+                law = self.model.getReaction(sid).getKineticLaw()
+                math = law.getMath() if law is not None and law.isSetMath() else None
+            if math is not None:
+                result = any(
+                    n.getType() == libsbml.AST_NAME_TIME for n in walk(math)
+                ) or any(self._continuous(d, stack) for d in names(math))
+        elif species is not None:
+            result = (
+                sid in self.reacting
+                and not species.getBoundaryCondition()
+                and not species.getConstant()
+            ) or (
+                not species.getHasOnlySubstanceUnits()
+                and bool(species.getCompartment())
+                and self._continuous(species.getCompartment(), stack)
+            )
+        # a result found without a cycle cut short is final
+        if result or len(stack) == 1:
+            self.continuous[sid] = result
+        return result
+
+    def _size_rate(self, cid: str) -> str | None:
+        """The id of the rate of the size of a compartment, created once.
+
+        `None` for a compartment whose size is constant or changed by events only.
+        """
+        if not self._continuous(cid):
+            return None
+        if cid not in self.size_rates:
+            compartment: libsbml.Compartment = self.model.getCompartment(cid)
+            size = self._compartment_unit(compartment)
+            time = self._unit(self.model.getTimeUnits())
+            label = compartment.getName() if compartment.isSetName() else cid
+            self.size_rates[cid] = Symbol(
+                sid=self._unique(f"d{cid}_dt"),
+                name=f"rate of {label}",
+                unit=f"{size}/{time}" if size and time else None,
+                sbo=None,
+                kind="rate",
+                element=(cid,),
+            )
+        return self.size_rates[cid].sid
+
+    def _build_size_rates(self) -> tuple[SizeRate, ...]:
+        """The rates of the sizes the system uses, in the order of the compartments.
+
+        The rate of a size with a rate rule is the right hand side of the rule, of a
+        size with an assignment rule the derivative of the rule (`_total_rate`); a
+        rule which cannot be differentiated, or whose derivative depends on the rate
+        itself (the size depends on a species in it), is unsupported.
+        """
+        size_rates = []
+        for cid in [c.getId() for c in self.model.getListOfCompartments()]:
+            symbol = self.size_rates.get(cid)
+            if symbol is None:
+                continue
+            if cid in self.rate_rules:
+                math: libsbml.ASTNode | None = self._resolved_rate(cid, cid)
+            else:
+                math = self._total_rate(cid, cid, frozenset())
+                if math is not None and symbol.sid in names(math):
+                    math = None
+                if math is None:
+                    self._unsupported("rate of an assigned size", cid)
+            size_rates.append(SizeRate(symbol, cid, math))
+        return tuple(size_rates)
+
+    def _total_rate(
+        self, sid: str, element: str, stack: frozenset[str]
+    ) -> libsbml.ASTNode | None:
+        """The rate of change of an id, the chain rule of an assigned one.
+
+        The rate of a state is its right hand side, of a constant 0, of a variable
+        with an assignment rule or of a reaction the derivative of its math by the
+        time, `df/dt = ∂f/∂t + sum ∂f/∂y dy/dt` over the ids `y` of the math, with the
+        function definitions expanded. `None` if a derivative is unknown.
+
+        Raises:
+            ValueError: if the rates depend on each other in a cycle
+        """
+        if sid in stack:
+            raise ValueError(
+                f"The rates of {sorted(stack)} depend on each other in a cycle."
+            )
+        if sid in self.rhs:
+            return self._resolved_rate(sid, element, stack)
+        if sid in self.assignment_rules:
+            math = self._resolve(self.assignment_rules[sid], element, stack)
+        elif sid in self.reaction_rates:
+            math = self.reaction_rates[sid]
+        elif sid in self.quantities:
+            return number(0.0)
+        else:
+            raise ValueError(
+                f"The rate of '{element}' refers to the unknown id '{sid}'."
+            )
+        expanded = math.deepCopy()
+        libsbml.SBMLTransforms.replaceFD(
+            expanded, self.model.getListOfFunctionDefinitions()
+        )
+        by_time = derivative(expanded, TIME)
+        if by_time is None:
+            return None
+        terms = [(1, by_time)]
+        for variable in sorted(names(expanded)):
+            partial = derivative(expanded, variable)
+            if partial is None:
+                return None
+            if is_number(partial, 0.0):
+                continue
+            rate = self._total_rate(variable, element, stack | {sid})
+            if rate is None:
+                return None
+            terms.append((1, multiply(partial, rate)))
+        return drop_zero_terms(signed_sum(terms))
+
+    # --- assignments and initial values -------------------------------------------
+
     def _build_assignments(
-        self, amounts: list[Quantity], reactions: list[Reaction]
+        self,
+        size_rates: tuple[SizeRate, ...],
+        rules: Mapping[str, libsbml.ASTNode],
+        reactions: list[Reaction],
     ) -> tuple[Assignment, ...]:
-        """The concentrations, assignment rules and reaction rates in dependency order."""
+        """The rates of the sizes, assignment rules and reaction rates in dependency order."""
         assignments = [
-            Assignment(str(q.amount_of), self._concentration(q), "concentration")
-            for q in amounts
+            Assignment(r.symbol.sid, r.math.deepCopy(), "size_rate")
+            for r in size_rates
+            if r.math is not None
         ]
         assignments.extend(
-            Assignment(sid, self._resolve(ast, sid), "assignment_rule")
-            for sid, ast in self.assignment_rules.items()
+            Assignment(sid, ast.deepCopy(), "assignment_rule")
+            for sid, ast in rules.items()
         )
         assignments.extend(
             Assignment(r.symbol.sid, r.rate.deepCopy(), "reaction") for r in reactions
         )
         return _ordered(assignments)
-
-    @staticmethod
-    def _concentration(amount: Quantity) -> libsbml.ASTNode:
-        """The concentration of the species of an amount, `n / V`."""
-        cid = str(amount.compartment)
-        return node(libsbml.AST_DIVIDE, name(amount.symbol.sid), name(cid))
 
     def _initial_of(self, quantity: Quantity) -> Assignment | None:
         """The initial value of a quantity if it is computed at t=0."""
@@ -825,20 +950,7 @@ class _Analysis:
             math = self._resolve(self.initial_assignments[sid], sid)
             return Assignment(sid, math, "initial_assignment")
         species: libsbml.Species | None = self.model.getSpecies(sid)
-        if quantity.amount_of is not None:
-            # the initial amount, else the amount of the initial concentration
-            if quantity.value is None or quantity.amount_of in self.initial_assignments:
-                math = node(libsbml.AST_TIMES, name(quantity.amount_of), name(cid))
-                return Assignment(sid, math, "initial_value")
-        elif sid in self.amounts:
-            if species is not None and species.isSetInitialAmount():
-                return Assignment(
-                    sid,
-                    self._concentration(self.quantities[self.amounts[sid]]),
-                    "concentration",
-                )
-            return Assignment(sid, number(quantity.value), "initial_value")
-        elif species is not None:
+        if species is not None:
             # converted with the initial size of the compartment
             if species.isSetInitialAmount() and not quantity.amount:
                 value = number(species.getInitialAmount())
@@ -853,24 +965,39 @@ class _Analysis:
         return None
 
     def _build_initial(
-        self, quantities: list[Quantity], reactions: list[Reaction]
+        self,
+        quantities: list[Quantity],
+        reactions: list[Reaction],
+        size_rates: tuple[SizeRate, ...],
     ) -> tuple[Assignment, ...]:
-        """The initial values at t=0 in dependency order, with the rates they need."""
+        """The initial values at t=0 in dependency order, with the rates they need.
+
+        The rates are the reaction rates and the rates of the sizes, e.g. of a
+        `rateOf` of a size in an initial assignment.
+        """
         initial = [a for q in quantities if (a := self._initial_of(q)) is not None]
+        rates: dict[str, tuple[libsbml.ASTNode, Origin]] = {
+            r.symbol.sid: (r.rate, "reaction") for r in reactions
+        }
+        rates.update(
+            (r.symbol.sid, (r.math, "size_rate"))
+            for r in size_rates
+            if r.math is not None
+        )
         referenced = set().union(*(names(a.math) for a in initial))
-        needed: set[str] = set()
+        needed: list[str] = []
         while True:
             # the rates the initial values need, and the rates these need
-            new = [r for r in reactions if r.symbol.sid in referenced - needed]
+            new = [sid for sid in rates if sid in referenced and sid not in needed]
             if not new:
                 break
-            for reaction in new:
-                needed.add(reaction.symbol.sid)
-                referenced |= names(reaction.rate)
+            for sid in new:
+                needed.append(sid)
+                referenced |= names(rates[sid][0])
         initial.extend(
-            Assignment(r.symbol.sid, r.rate.deepCopy(), "reaction")
-            for r in reactions
-            if r.symbol.sid in needed
+            Assignment(sid, math.deepCopy(), origin)
+            for sid, (math, origin) in rates.items()
+            if sid in needed
         )
         return _ordered(initial)
 
@@ -930,11 +1057,12 @@ class _Analysis:
     ) -> tuple[EventAssignment, ...]:
         """The assignments of an event to the states and constants of the system.
 
-        The concentration of a species held as amount is assigned as amount, its
-        value scaled by the size at the execution (test case 01779). A species in
-        concentration with a rate rule is rescaled when the event changes the size
-        of its compartment, its amount stays (test case 01506). See
-        `EventAssignment` for when each part is evaluated.
+        An event which changes the size of a compartment (`_resized`) keeps the
+        amount of every species in concentration in it (`_rescaled`): the species is
+        rescaled to the size after the event, `S = S * V / V_new` (test cases 01506,
+        01779); a concentration the event assigns is converted with the size before
+        and after the event, `S = S_new * V / V_new`. See `EventAssignment` for when
+        each part is evaluated; the assignments with divisor come last.
         """
         assigned: dict[str, libsbml.ASTNode] = {}
         assignment: libsbml.EventAssignment
@@ -949,33 +1077,62 @@ class _Analysis:
                 continue
             if quantity.constant:
                 self._unsupported("event assignment to a constant", eid)
-            elif quantity.role == "assigned" and variable not in self.amounts:
+            elif quantity.role == "assigned":
                 self._unsupported("event assignment to an assigned variable", eid)
             else:
                 math = self._math(eid, assignment.getMath())
                 assigned[variable] = self._resolve(math, eid)
-        result = []
+        resized = self._resized(set(assigned))
+        plain: list[EventAssignment] = []
+        divided: list[EventAssignment] = []
         for variable, math in assigned.items():
             cid = str(self.quantities[variable].compartment)
-            if variable in self.amounts:
-                amount = self.amounts[variable]
-                result.append(EventAssignment(amount, math, scale=name(cid)))
-            elif self._rescaled(variable) and cid in assigned:
-                result.append(EventAssignment(variable, math, name(cid), cid))
+            if self._rescaled(variable) and cid in resized:
+                divided.append(EventAssignment(variable, math, name(cid), cid))
             else:
-                result.append(EventAssignment(variable, math))
+                plain.append(EventAssignment(variable, math))
         for sid, quantity in self.quantities.items():
             cid = str(quantity.compartment)
-            if self._rescaled(sid) and cid in assigned and sid not in assigned:
+            if self._rescaled(sid) and cid in resized and sid not in assigned:
                 scale = node(libsbml.AST_TIMES, name(sid), name(cid))
-                result.append(EventAssignment(sid, None, scale, cid))
-        return tuple(result)
+                divided.append(EventAssignment(sid, None, scale, cid))
+        return (*plain, *divided)
 
     def _rescaled(self, sid: str) -> bool:
-        """Check that an id is a species in concentration with a rate rule."""
+        """Check that an id is a species in concentration without an assignment rule."""
         quantity = self.quantities[sid]
         return (
             quantity.symbol.kind == "species"
-            and sid in self.rate_rules
             and not quantity.amount
+            and quantity.compartment is not None
+            and sid not in self.assignment_rules
         )
+
+    def _resized(self, assigned: set[str]) -> set[str]:
+        """The compartments whose size changes when the given ids are assigned.
+
+        A compartment which is assigned, or whose assignment rule depends on an
+        assigned id, through other assignment rules and reaction rates.
+        """
+        resized = set()
+        for compartment in self.model.getListOfCompartments():
+            cid = compartment.getId()
+            if cid in assigned or self._depends_on(cid) & assigned:
+                resized.add(cid)
+        return resized
+
+    def _depends_on(self, sid: str) -> set[str]:
+        """The ids the assignment rule of an id depends on, transitively."""
+        found: set[str] = set()
+        stack = [sid]
+        while stack:
+            current = stack.pop()
+            math = self.assignment_rules.get(current) or self.reaction_rates.get(
+                current
+            )
+            if math is None:
+                continue
+            for dependency in names(math) - found:
+                found.add(dependency)
+                stack.append(dependency)
+        return found

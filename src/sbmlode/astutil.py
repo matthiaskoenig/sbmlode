@@ -24,6 +24,7 @@ __all__ = [
     "derivative",
     "drop_zero_terms",
     "is_number",
+    "multiply",
     "name",
     "negated",
     "node",
@@ -181,8 +182,10 @@ def _copy(ast: libsbml.ASTNode, k: int) -> libsbml.ASTNode:
     return ast.getChild(k).deepCopy()
 
 
-def _mul(*factors: libsbml.ASTNode) -> libsbml.ASTNode:
+def multiply(*factors: libsbml.ASTNode) -> libsbml.ASTNode:
     """The simplified product of the factors, which it takes ownership of.
+
+    For the derivative of a math and the chain rule of the analysis.
 
     The factors of a product among them are flattened into the product, the numbers
     are multiplied into one coefficient in front, `0` if a factor is 0; the factor 1
@@ -254,11 +257,13 @@ _OUTER: dict[int, Callable[[Callable[[], libsbml.ASTNode]], libsbml.ASTNode]] = 
     libsbml.AST_FUNCTION_SIN: lambda u: _call(libsbml.AST_FUNCTION_COS, u()),
     libsbml.AST_FUNCTION_COS: lambda u: negated(_call(libsbml.AST_FUNCTION_SIN, u())),
     libsbml.AST_FUNCTION_TAN: lambda u: _square(_call(libsbml.AST_FUNCTION_SEC, u())),
-    libsbml.AST_FUNCTION_SEC: lambda u: _mul(
+    libsbml.AST_FUNCTION_SEC: lambda u: multiply(
         _call(libsbml.AST_FUNCTION_SEC, u()), _call(libsbml.AST_FUNCTION_TAN, u())
     ),
     libsbml.AST_FUNCTION_CSC: lambda u: negated(
-        _mul(_call(libsbml.AST_FUNCTION_CSC, u()), _call(libsbml.AST_FUNCTION_COT, u()))
+        multiply(
+            _call(libsbml.AST_FUNCTION_CSC, u()), _call(libsbml.AST_FUNCTION_COT, u())
+        )
     ),
     libsbml.AST_FUNCTION_COT: lambda u: negated(
         _square(_call(libsbml.AST_FUNCTION_CSC, u()))
@@ -359,7 +364,7 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
             if not is_number(rate, 0.0):
                 others = [_copy(ast, j) for j in range(count)]
                 others[k] = rate
-                terms.append((1, _mul(*others)))
+                terms.append((1, multiply(*others)))
         return signed_sum(terms)
     if ast_type == libsbml.AST_DIVIDE and count == 2:
         return _quotient(ast, d[0], d[1])
@@ -382,7 +387,7 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
             return None
         argument = _copy(ast, count - 1)
         logarithm = _call(libsbml.AST_FUNCTION_LN, base)
-        return _div(d[-1], _mul(argument, logarithm))
+        return _div(d[-1], multiply(argument, logarithm))
     if ast_type == libsbml.AST_FUNCTION_ABS and count == 1:
         positive = node(libsbml.AST_RELATIONAL_GT, _copy(ast, 0), number(0.0))
         if is_number(d[0], 0.0):
@@ -397,8 +402,8 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
         rate = outer(lambda: _copy(ast, 0))
         if rate.getType() == libsbml.AST_DIVIDE and is_number(rate.getChild(0)):
             # c u' / f(u) rather than u' * (c / f(u))
-            return _div(_mul(_copy(rate, 0), d[0]), _copy(rate, 1))
-        return _mul(d[0], rate)
+            return _div(multiply(_copy(rate, 0), d[0]), _copy(rate, 1))
+        return multiply(d[0], rate)
     return None
 
 
@@ -439,7 +444,7 @@ def _quotient_of(
     """The derivative `(u' v - u v') / v^2` of `u/v`, `u'/v` for a constant `v`."""
     if is_number(v_rate, 0.0):
         return _div(u_rate, v)
-    numerator = _sum((1, _mul(u_rate, v.deepCopy())), (-1, _mul(u, v_rate)))
+    numerator = _sum((1, multiply(u_rate, v.deepCopy())), (-1, multiply(u, v_rate)))
     return _div(numerator, _square(v))
 
 
@@ -460,11 +465,11 @@ def _power(
             lowered = number(exponent.getValue() - 1.0)
         else:
             lowered = _sum((1, exponent.deepCopy()), (-1, number(1.0)))
-        return _mul(exponent, _pow(base, lowered), base_rate)
+        return multiply(exponent, _pow(base, lowered), base_rate)
     power = _pow(base.deepCopy(), exponent.deepCopy())
     logarithm = _call(libsbml.AST_FUNCTION_LN, base.deepCopy())
     inner = _sum(
-        (1, _mul(exponent_rate, logarithm)),
-        (1, _mul(exponent, _div(base_rate, base))),
+        (1, multiply(exponent_rate, logarithm)),
+        (1, multiply(exponent, _div(base_rate, base))),
     )
-    return _mul(power, inner)
+    return multiply(power, inner)

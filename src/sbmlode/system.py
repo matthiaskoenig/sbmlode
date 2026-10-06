@@ -8,22 +8,30 @@ implements them, so that a format only prints what the system holds:
   reference with a rate rule. Every other quantity is constant or assigned; a
   quantity an event changes is constant between the events (`Quantity.constant` is
   the flag of SBML, `Quantity.role` the role in the system).
-- **Species** are held as roadrunner holds them, in amount if `hasOnlySubstanceUnits`,
-  else in concentration; the reaction terms of a species in concentration are
-  divided by its compartment. A rate rule applies to the species as written.
-- **A species in concentration in a variable compartment** (a rate rule, an
-  assignment rule or an event changes the size) without a rule of its own is held as
-  its amount `n_<id>` (`OdeSystem.amounts`, made unique against the ids of the
-  model), the quantity SBML conserves when the size changes, and its concentration
-  is the assignment `S = n_S / V` of origin `concentration`. The amount is a state
-  if the species is a state, else a constant (roadrunner keeps the amount of a
-  boundary or constant species when the size changes). An event which assigns
-  the concentration assigns the amount `n_S = S_new * V` with the size at the
-  execution before the event; an event which changes the size of the compartment
-  of a species in concentration with a rate rule rescales it, `S = S * V / V_new`
-  (`EventAssignment` keeps the value of SBML and this conversion apart, they are
-  evaluated at different times). The state of an amount takes the place of its
-  species in the order of the states.
+- **Species** are states in the quantity the model declares, in amount if
+  `hasOnlySubstanceUnits`, else in concentration, as roadrunner holds them. The ODE of
+  a species in concentration is the one of SBML L3V2 section 3.4.6 (rateOf),
+  `d[S]/dt = (1/V) dS/dt - ([S]/V) dV/dt`: the reaction terms divided by its
+  compartment and, if the size of the compartment changes continuously, the
+  dilution `-(S/V) dV/dt` (`Ode.size_rate`). A rate rule applies to the species as
+  written.
+- **The rate of a size** `dV/dt` of a compartment with a rate rule or an assignment
+  rule is the assignment of origin `size_rate` of a symbol of kind `rate`
+  (`OdeSystem.size_rates`, `d<V>_dt` made unique against the ids of the model, its
+  source the compartment): the right hand side of the rate rule, or the chain rule of
+  the assignment rule, `dV/dt = df/dt + sum df/dy dy/dt` with the rates of the
+  states inlined (`astutil.derivative`); a rule which cannot be differentiated (e.g.
+  `delay`) is unsupported, `rate of an assigned size`.
+- **A species in concentration in a compartment whose size changes continuously**
+  which is no state otherwise (a boundary, constant or not reacting species, whose
+  amount roadrunner keeps) is a state with the dilution alone, origin `dilution`.
+- **An event which changes a size** keeps the amount of every species in
+  concentration of the compartment (without a rule of its own): it is rescaled,
+  `S = S * V / V_new`, with the size after the assignments of the event, of a
+  compartment the event assigns or of a compartment whose assignment rule depends on
+  a variable the event assigns; an event which assigns the concentration of such a
+  species assigns `S = S_new * V / V_new` (`EventAssignment` keeps the value of SBML
+  and this conversion apart, they are evaluated at different times).
 - **Conversion factors**: the conversion factor of a species, else of the model,
   multiplies the reaction terms of the species.
 - **Stoichiometry** is a number, or the id of the species reference if a rule, an
@@ -32,9 +40,9 @@ implements them, so that a format only prints what the system holds:
 - **Local parameters** are renamed to `<reaction id>_<id>`, made unique, and are
   constant parameters of the system.
 - **`rateOf(x)`** is replaced by the right hand side of `x` for a state, by `0` for a
-  constant, by `d(n/V)/dt` for a concentration held as amount; the rate of another
-  assigned variable is unsupported.
-- **Assignments** (assignment rules, concentrations and reaction rates) are ordered
+  constant, by the rate of the size of a compartment with an assignment rule; the
+  rate of another assigned variable is unsupported.
+- **Assignments** (the rates of the sizes, assignment rules and reaction rates) are ordered
   by their dependencies, ties in the order of the document; a cycle is an error.
 - **Initial values** at t=0 (`OdeSystem.initial`) are every state, every constant set
   by an initial assignment or converted between amount and concentration, every
@@ -56,7 +64,7 @@ implements them, so that a format only prints what the system holds:
 - **Unsupported** constructs are collected as `(construct, element id)`: algebraic
   rules, `delay`, fast reactions, distrib functions, an event assignment to a
   constant, a trigger without a continuous root function, the rate of an assigned
-  variable. A comp model is flattened first, an L1 or L2 model read as L3V2.
+  variable, the rate of an assigned size which cannot be differentiated. A comp model is flattened first, an L1 or L2 model read as L3V2.
 
 Every math of the system is a deep copy owned by the system, so the document can be
 freed; a sum is written with the signs of its terms (`astutil.signed_sum`). The
@@ -88,6 +96,7 @@ __all__ = [
     "Participant",
     "Quantity",
     "Reaction",
+    "SizeRate",
     "Symbol",
 ]
 
@@ -100,6 +109,7 @@ Kind = Literal[
     "species_reference",
     "function",
     "event",
+    "rate",
 ]
 Role = Literal["constant", "state", "assigned"]
 Origin = Literal[
@@ -107,7 +117,7 @@ Origin = Literal[
     "initial_assignment",
     "reaction",
     "initial_value",
-    "concentration",
+    "size_rate",
 ]
 
 
@@ -117,15 +127,15 @@ class Symbol:
 
     Attributes:
         sid: the id in the system, which the analysis makes up or changes for a
-            renamed local parameter (`<reaction>_<id>`) and the amount of a species
-            (`n_<species>`)
+            renamed local parameter (`<reaction>_<id>`) and the rate of the size of a
+            compartment (`d<compartment>_dt`)
         name: the name
         unit: the unit
         sbo: the SBO term
         kind: the kind of the element
         element: the element of the model the symbol stands for, if it is not the
-            element of `sid`: `(reaction, id)` for a local parameter, `(species,)` for
-            the amount of a species; empty otherwise, see `source`
+            element of `sid`: `(reaction, id)` for a local parameter, `(compartment,)`
+            for the rate of its size; empty otherwise, see `source`
     """
 
     sid: str
@@ -140,7 +150,7 @@ class Symbol:
         """The element of the model the symbol stands for.
 
         `(sid,)` for an element of the model, `(reaction, id)` for a local parameter
-        of a reaction, `(species,)` for the amount of a species; an application which
+        of a reaction, `(compartment,)` for the rate of its size; an application which
         links a symbol to its element resolves this, e.g. SBML4Humans.
         """
         return self.element or (self.sid,)
@@ -148,7 +158,7 @@ class Symbol:
 
 @dataclass(frozen=True)
 class Quantity:
-    """A compartment, species, parameter, species reference or amount of a species.
+    """A compartment, species, parameter or species reference.
 
     Attributes:
         symbol: the symbol
@@ -157,13 +167,12 @@ class Quantity:
             needs a conversion, which `OdeSystem.initial` then holds
         constant: the constant flag of SBML
         role: the role in the system
-        compartment: the compartment of a species or an amount, `None` for a
+        compartment: the compartment of a species, `None` for a
             species in amount without a compartment, which L3 requires and
             libsbml reads
         amount: a species in amount (`hasOnlySubstanceUnits`)
         boundary: the boundary condition of a species
         conversion_factor: the conversion factor of a species, else of the model
-        amount_of: the species of an amount, see `OdeSystem.amounts`
     """
 
     symbol: Symbol
@@ -174,7 +183,23 @@ class Quantity:
     amount: bool | None = None
     boundary: bool | None = None
     conversion_factor: str | None = None
-    amount_of: str | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class SizeRate:
+    """The rate of change `dV/dt` of the size of a compartment, see the module.
+
+    Attributes:
+        symbol: the symbol of the rate, of kind `rate`, its source the compartment
+        compartment: the id of the compartment
+        math: the rate, the right hand side of the rate rule of the compartment or
+            the derivative of its assignment rule; `None` if the rule cannot be
+            differentiated
+    """
+
+    symbol: Symbol
+    compartment: str
+    math: libsbml.ASTNode | None
 
 
 @dataclass(frozen=True, eq=False)
@@ -223,19 +248,21 @@ class Ode:
     Attributes:
         variable: the state
         rhs: the complete right hand side
-        origin: the reactions or the rate rule of the state
+        origin: the reactions, the rate rule of the state or the dilution alone of
+            a species in concentration in a compartment whose size changes
         reaction_terms: the sum of stoichiometry, conversion factor and rate of each
             reaction of a species, before the division by the volume
         volume: the compartment the reaction terms are divided by
-        amount_of: the species whose amount the state is
+        size_rate: the id of the rate of the size of the compartment of a species in
+            concentration, whose dilution `-(S/V) dV/dt` the right hand side ends with
     """
 
     variable: str
     rhs: libsbml.ASTNode
-    origin: Literal["reactions", "rate_rule"]
+    origin: Literal["reactions", "rate_rule", "dilution"]
     reaction_terms: libsbml.ASTNode | None = None
     volume: str | None = None
-    amount_of: str | None = None
+    size_rate: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -249,14 +276,17 @@ class EventAssignment:
       `None`;
     - `scale` is evaluated at the execution of the event, with the values before any
       assignment of the event is applied, i.e. after the events executed before it;
-    - `new(divisor)` is the new value of the assignment of the same event to the id
-      `divisor`, a compartment which is assigned without scale.
+    - `new(divisor)` is the size of the compartment `divisor` after the assignments
+      of the event without divisor are applied: the size the event assigns, or the
+      size of an assignment rule evaluated with the values after the event.
+
+    The assignments without divisor come first in `Event.assignments`.
 
     Attributes:
-        variable: the variable, the amount of a species held as amount
+        variable: the variable
         math: the value SBML assigns, `None` for a species whose amount stays
-        scale: `V` for a concentration assigned as amount `n = S * V` and for a
-            rescaled concentration, `S * V` for a concentration whose amount stays
+        scale: `V` for a rescaled concentration, `S * V` for a concentration whose
+            amount stays
         divisor: the compartment whose new size divides a rescaled concentration,
             `S = S_value * V / V_new`
     """
@@ -302,10 +332,10 @@ class OdeSystem:
     info: ModelInfo
     compartments: tuple[Quantity, ...]
     species: tuple[Quantity, ...]
-    amounts: tuple[Quantity, ...]
     parameters: tuple[Quantity, ...]
     species_references: tuple[Quantity, ...]
     functions: tuple[FunctionDefinition, ...]
+    size_rates: tuple[SizeRate, ...]
     assignments: tuple[Assignment, ...]
     initial: tuple[Assignment, ...]
     reactions: tuple[Reaction, ...]
@@ -368,7 +398,7 @@ class OdeSystem:
             wrap: the function every math symbol is transformed with, from its
                 `Symbol` and its typeset symbol, e.g. into a link to the element
                 `Symbol.source` names; called for the symbols the documents make up
-                as well, the rate `v` of a reaction and the amount `n` of a species
+                as well, the rate `v` of a reaction and the rate `dV/dt` of a size
 
         Returns:
             the typeset system
@@ -444,18 +474,13 @@ class OdeSystem:
 
     @property
     def quantities(self) -> tuple[Quantity, ...]:
-        """The compartments, species, parameters and species references.
-
-        A species held as amount is followed by its amount.
-        """
-        amount_of = {amount.amount_of: amount for amount in self.amounts}
-        held = (
-            quantity
-            for species in self.species
-            for quantity in (species, amount_of.get(species.symbol.sid))
-            if quantity is not None
+        """The compartments, species, parameters and species references."""
+        return (
+            *self.compartments,
+            *self.species,
+            *self.parameters,
+            *self.species_references,
         )
-        return (*self.compartments, *held, *self.parameters, *self.species_references)
 
     @cached_property
     def _quantities(self) -> dict[str, Quantity]:
@@ -466,6 +491,11 @@ class OdeSystem:
     def _symbols(self) -> dict[str, Symbol]:
         """The symbols by their id."""
         symbols = {sid: q.symbol for sid, q in self._quantities.items()}
-        for element in (*self.reactions, *self.functions, *self.events):
+        for element in (
+            *self.reactions,
+            *self.functions,
+            *self.events,
+            *self.size_rates,
+        ):
             symbols[element.symbol.sid] = element.symbol
         return symbols

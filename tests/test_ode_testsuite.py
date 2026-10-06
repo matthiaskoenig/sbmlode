@@ -82,6 +82,8 @@ CURATED: list[str] = [
     "00031", "00032", "00033",  # rate rules
     "00039", "00040", "00182",  # algebraic rules, unsupported
     "00051", "00052", "00053",  # compartments which are not constant
+    "00139", "00310", "00946",  # sizes of an assignment rule, the chain rule
+    "00945", "00947", "01780",  # sizes an event changes, rescaled
     "00057", "00058",           # local parameters, with 00027
     "00060", "00061", "00062",  # species in amount
     "00072", "00073",           # delays, with 00071
@@ -98,7 +100,7 @@ CURATED: list[str] = [
     "01248", "01249", "01250",  # rateOf
     "01488",                    # math of the time out of its domain in a function
     "01506",                    # an event changes the size, a rate rule rescales
-    "01779",                    # an event assigns a concentration held as amount
+    "01779",                    # an event assigns a concentration and the size
 ]
 # fmt: on
 

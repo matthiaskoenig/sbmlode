@@ -33,6 +33,7 @@ from resources import (
     GALACTOSE_SINGLECELL_SBML,
     MODELS_DIR,
     REPRESSILATOR_SBML,
+    VARIABLE_COMPARTMENT,
     VDP_SBML,
 )
 
@@ -99,13 +100,13 @@ def test_python_model(sbml_path: Path, tmp_path: Path) -> None:
 
 
 def test_python_rules_and_functions(tmp_path: Path) -> None:
-    """Function definitions, rules, an initial assignment and an amount state."""
+    """Function definitions, rules, an initial assignment and a variable size."""
     module = assert_python_as_roadrunner(model_sbml(RULES), tmp_path)
-    assert module.XIDS == ["c", "n_A", "n_B"]
+    assert module.XIDS == ["c", "A", "B"]
     x0, p = module.initial_values()
     # the initial assignment of the constant is set in p
     assert p[module.PIDS.index("keff")] == 4.0
-    assert x0[module.XIDS.index("n_A")] == pytest.approx(6.0)
+    assert x0[module.XIDS.index("A")] == pytest.approx(3.0)
 
 
 def test_python_initial_values_take_constants(tmp_path: Path) -> None:
@@ -326,6 +327,57 @@ def _assert_events_as_roadrunner(antimony: str, tmp_path: Path) -> pd.DataFrame:
     return module.simulate(T_END, T_STEPS, rtol=1e-10, atol=1e-12)
 
 
+def _swelling(model: libsbml.Model) -> None:
+    """An event at t = 1 which doubles the parameter `Va0` of the rule of `Va`."""
+    event: libsbml.Event = model.createEvent()
+    event.setId("swell")
+    event.setUseValuesFromTriggerTime(True)
+    trigger: libsbml.Trigger = event.createTrigger()
+    trigger.setInitialValue(True)
+    trigger.setPersistent(True)
+    trigger.setMath(libsbml.parseL3Formula("time > 1"))
+    assignment: libsbml.EventAssignment = event.createEventAssignment()
+    assignment.setVariable("Va0")
+    assignment.setMath(libsbml.parseL3Formula("2 * Va0"))
+
+
+def test_variable_compartments_simulate_as_roadrunner(tmp_path: Path) -> None:
+    """Concentrations in sizes of a rate rule, an assignment rule and an event.
+
+    The size of the assignment rule `Va` depends on the time and on `S1`, its rate is
+    the chain rule; the event `grow` rescales `S3` with the size after the event.
+    """
+    assert_python_as_roadrunner(VARIABLE_COMPARTMENT, tmp_path)
+    module = python_module(OdeSystem.from_sbml(VARIABLE_COMPARTMENT), tmp_path / "v.py")
+    assert_trajectory_as_roadrunner(
+        VARIABLE_COMPARTMENT, module, rtol=EVENT_RTOL, atol=EVENT_ATOL
+    )
+
+
+def test_event_resizes_assigned_compartment(tmp_path: Path) -> None:
+    """An event which changes a parameter of the rule of a size rescales its species.
+
+    The amount of `S2` in `Va` is kept when `Va` jumps with `Va0`.
+    """
+    sbml = edit_sbml(VARIABLE_COMPARTMENT.read_text(), _swelling)
+    system = OdeSystem.from_sbml(sbml)
+    swell = next(e for e in system.events if e.symbol.sid == "swell")
+    assert [(a.variable, a.divisor) for a in swell.assignments] == [
+        ("Va0", None),
+        ("S2", "Va"),
+    ]
+    module = python_module(system, tmp_path / "swell.py")
+    assert_trajectory_as_roadrunner(sbml, module, rtol=EVENT_RTOL, atol=EVENT_ATOL)
+    df = module.simulate(2.0, 201, rtol=1e-10, atol=1e-12)
+    before = df[df["time"] <= 1.0].iloc[-1]
+    after = df[df["time"] > 1.0].iloc[0]
+    # the amount S2 * Va is continuous at the event, up to one step of the reaction
+    assert after["S2"] * after["Va"] == pytest.approx(
+        before["S2"] * before["Va"], rel=2e-2
+    )
+    assert after["Va"] > 1.5 * before["Va"]
+
+
 def test_two_events(tmp_path: Path) -> None:
     """Events with a delay and priorities simulate as roadrunner."""
     df = _assert_events_as_roadrunner(TWO_EVENTS, tmp_path)
@@ -433,9 +485,9 @@ def test_event_persistent(tmp_path: Path) -> None:
 def test_event_changes_compartment(tmp_path: Path) -> None:
     """An event which changes a size keeps the amounts, SBML conserves them.
 
-    A species in concentration keeps its amount, so that its concentration changes
-    with the size; an assignment of a concentration with the size is an amount in
-    the size before the event; a concentration with a rate rule is rescaled.
+    A species in concentration keeps its amount, so that its concentration is
+    rescaled with the size; an assignment of a concentration with the size is
+    converted from the size before the event to the size after it.
     """
     df = _assert_events_as_roadrunner(
         EVENT_MODELS["compartment"],
@@ -634,6 +686,7 @@ def test_python_code_parses_and_names_are_reserved(antimony: str) -> None:
     ids += [r.symbol.sid for r in system.reactions]
     ids += [f.symbol.sid for f in system.functions]
     ids += [e.symbol.sid for e in system.events]
+    ids += [r.symbol.sid for r in system.size_rates]
     model_names = set(code_names(ids, "python").values())
     events = context(system, FORMATS["python"], {"simulator": True})["events"]
     assert isinstance(events, list)
@@ -712,10 +765,11 @@ def test_python_layout() -> None:
     assert "\n\n\n\n" not in code
 
 
-def test_python_amount_state_is_named() -> None:
-    """The amount of a species in a variable compartment reads as its amount."""
+def test_python_dilution_is_written() -> None:
+    """A species in a variable compartment is diluted by the rate of the size."""
     code = _code(RULES)
-    assert "n_A = x[1]  # amount of A" in code
+    assert "    dc_dt = 0.1  # rate of c" in code
+    assert "    dx[1] = -J1 / c - A / c * dc_dt  # dA/dt" in code
 
 
 def test_python_function_definitions() -> None:
@@ -789,6 +843,7 @@ def test_event_context() -> None:
         "priority": "event_priority_E1",
         "values": "event_values_E1_",
         "assign": "event_assign_E1",
+        "sizes": None,
     }
     assert {a["id"] for a in event["assignments"]} == {"A", "event_values_E1"}
     event_constants = data["event_constants"]

@@ -374,11 +374,11 @@ def test_r_as_roadrunner(name: str, r: Callable[[str], JobOutput]) -> None:
 
 
 def test_r_rules_and_functions(r: Callable[[str], JobOutput]) -> None:
-    """Function definitions, rules, an initial assignment and an amount state."""
+    """Function definitions, rules, an initial assignment and a variable size."""
     values = r("rules").point_values()
-    assert values.xids == ["c", "n_A", "n_B"]
+    assert values.xids == ["c", "A", "B"]
     assert values.p[values.pids.index("keff")] == 4.0
-    assert values.x0[values.xids.index("n_A")] == pytest.approx(6.0)
+    assert values.x0[values.xids.index("A")] == pytest.approx(3.0)
 
 
 def test_r_reserved_ids(r: Callable[[str], JobOutput]) -> None:
@@ -412,7 +412,7 @@ def test_r_initial_values_take_constants(r: Callable[[str], JobOutput]) -> None:
     assert output.floats("p_new")[pids.index("keff")] == 20.0
     # named vectors, the constants passed are not changed
     assert output.strings("p_names") == pids
-    assert output.strings("x0_names") == ["c", "n_A", "n_B"]
+    assert output.strings("x0_names") == ["c", "A", "B"]
     assert output.strings("unchanged") == ["TRUE"]
     assert output.floats("x0").tolist() == r("rules").floats("x0").tolist()
 
@@ -675,6 +675,7 @@ def test_r_names_are_reserved(name: str, r: Callable[[str], JobOutput]) -> None:
     ids += [r.symbol.sid for r in system.reactions]
     ids += [f.symbol.sid for f in system.functions]
     ids += [e.symbol.sid for e in system.events]
+    ids += [r.symbol.sid for r in system.size_rates]
     model_names = set(code_names(ids, "r").values())
     data = context(system, FORMATS["r"], {"simulator": simulator})
     events = data["events"]
@@ -724,9 +725,9 @@ def test_r_function_definitions() -> None:
     assert "mm(A, km)" in code
 
 
-def test_r_amount_state_is_named() -> None:
-    """The amount of a species in a variable compartment reads as its amount."""
-    assert "n_A <- x[[2]]  # amount of A" in _code(RULES)
+def test_r_dilution_is_written() -> None:
+    """A species in a variable compartment is diluted by the rate of the size."""
+    assert "  dx[[2]] <- -J1 / c_ - A / c_ * dc_dt  # dA/dt" in _code(RULES)
 
 
 def test_r_format() -> None:

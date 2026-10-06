@@ -66,7 +66,7 @@ def test_reaction_ode_in_concentration() -> None:
     assert formula(ode["S1"].reaction_terms) == "-J0"
     assert ode["S1"].volume == "c"
     assert ode["S1"].origin == "reactions"
-    assert ode["S1"].amount_of is None
+    assert ode["S1"].size_rate is None
     reaction = system.reactions[0]
     assert reaction.reactants == (Participant("S1", 1.0),)
     assert reaction.products == (Participant("S2", 2.0),)
@@ -122,40 +122,42 @@ def test_reaction_without_kinetic_law_has_rate_zero() -> None:
 
 
 def test_variable_compartment_ode() -> None:
-    """A species in concentration in a variable compartment is integrated as amount."""
+    """A species in concentration in a variable compartment stays in concentration.
+
+    Its ODE is the one of SBML L3V2 section 3.4.6, the reaction terms divided by the
+    size and the dilution by the rate of the size.
+    """
     system = system_of("""
         compartment c = 2; c' = 0.1; species S in c = 10
         J0: S -> ; k*S; k = 0.1
     """)
-    assert system.states == ("c", "n_S")
+    assert system.states == ("c", "S")
     ode = odes(system)
-    assert ode["n_S"].amount_of == "S"
-    assert formula(ode["n_S"].rhs) == "-J0"
-    assert ode["n_S"].volume is None
+    assert formula(ode["S"].rhs) == "-J0 / c - (S / c) * dc_dt"
+    assert ode["S"].volume == "c"
+    assert ode["S"].size_rate == "dc_dt"
+    assert ode["S"].origin == "reactions"
     assert formula(ode["c"].rhs) == "0.1"
     assert ode["c"].origin == "rate_rule"
-    amount = system.quantity("n_S")
-    assert amount.amount_of == "S"
-    assert amount.role == "state"
-    assert amount.compartment == "c"
-    assert amount.symbol.kind == "species"
-    assert system.symbol("n_S").name == "amount of S"
-    assert system.quantity("S").role == "assigned"
+    (rate,) = system.size_rates
+    assert rate.compartment == "c"
+    assert formula(rate.math) == "0.1"
+    assert rate.symbol.kind == "rate"
+    assert rate.symbol.source == ("c",)
+    assert system.symbol("dc_dt").name == "rate of c"
+    assert system.quantity("S").role == "state"
     assert math_of(system.assignments) == {
-        "S": ("n_S / c", "concentration"),
+        "dc_dt": ("0.1", "size_rate"),
         "J0": ("k * S", "reaction"),
     }
-    assert system.assigned == ("S", "J0")
     assert math_of(system.initial) == {
         "c": ("2", "initial_value"),
         "S": ("10", "initial_value"),
-        "n_S": ("S * c", "initial_value"),
     }
-    assert [a.variable for a in system.initial] == ["c", "S", "n_S"]
 
 
 def test_variable_compartment_initial_amount() -> None:
-    """The amount of a species with an initial amount is the initial amount."""
+    """A species in concentration with an initial amount starts at the amount per size."""
 
     def initial_amount(model: libsbml.Model) -> None:
         species: libsbml.Species = model.getSpecies("S")
@@ -169,34 +171,73 @@ def test_variable_compartment_initial_amount() -> None:
         initial_amount,
     )
     system = OdeSystem.from_sbml(sbml)
-    assert system.states == ("n_S",)
-    assert system.quantity("n_S").value == 20.0
+    assert system.states == ("S",)
     assert system.quantity("S").value is None
     assert math_of(system.initial) == {
         "c": ("2 + time", "assignment_rule"),
-        "n_S": ("20", "initial_value"),
-        "S": ("n_S / c", "concentration"),
+        "S": ("20 / c", "initial_value"),
     }
 
 
-def test_variable_compartment_keeps_the_amount_of_a_constant_species() -> None:
-    """A species of no reaction in a variable compartment keeps its amount."""
+def test_assigned_compartment_without_its_own_species() -> None:
+    """The size rate of a rule of the time and of a species in another compartment."""
+    system = system_of("""
+        compartment c = 2; compartment d = 1
+        c := V0 * (1 + k_a * time) + a * S1; V0 = 1; k_a = 0.2; a = 0.1
+        species S1 in d = 1; species S2 in c = 0
+        J0: S1 -> S2; k*S1; k = 0.1
+    """)
+    rates = {r.compartment: formula(r.math) for r in system.size_rates}
+    assert rates == {"c": "V0 * k_a + a * (-J0 / d)"}
+    assert formula(odes(system)["S2"].rhs) == "J0 / c - (S2 / c) * dc_dt"
+    assert system.unsupported == ()
+
+
+def test_assigned_compartment_of_constants_is_constant() -> None:
+    """A size with an assignment rule of constants only dilutes no species."""
+    system = system_of("""
+        compartment c; c := BW * f; BW = 70; f = 0.02
+        species S in c = 1; J0: S -> ; k*S; k = 0.1
+    """)
+    assert system.size_rates == ()
+    assert formula(odes(system)["S"].rhs) == "-J0 / c"
+
+
+def test_size_rate_not_differentiable() -> None:
+    """A size whose rule cannot be differentiated is unsupported, its rate unknown."""
+    system = system_of("""
+        compartment c = 2; c := 1 + rem(S1, 2); species S1 in d = 1
+        compartment d = 1; species S2 in c = 0; J0: S1 -> S2; k*S1; k = 0.1
+    """)
+    assert ("rate of an assigned size", "c") in system.unsupported
+    (rate,) = system.size_rates
+    assert rate.math is None
+    assert "dc_dt" not in system.assigned
+    with pytest.raises(NotImplementedError, match="rate of an assigned size"):
+        system.render("python")
+    system.typeset()
+
+
+def test_variable_compartment_dilutes_a_boundary_species() -> None:
+    """A species of no reaction in a variable compartment keeps its amount, diluted."""
     system = system_of("""
         compartment c = 2; c' = 1; species $B in c = 10
     """)
-    assert system.states == ("c",)
-    assert system.quantity("n_B").role == "constant"
-    assert "n_B" in system.constants
-    assert math_of(system.assignments) == {"B": ("n_B / c", "concentration")}
-    assert math_of(system.initial)["n_B"] == ("B * c", "initial_value")
+    assert system.states == ("c", "B")
+    ode = odes(system)["B"]
+    assert ode.origin == "dilution"
+    assert formula(ode.rhs) == "-((B / c) * dc_dt)"
+    assert math_of(system.initial)["B"] == ("10", "initial_value")
 
 
-def test_amount_id_is_unique() -> None:
-    """The id of an amount is made unique against the ids of the model."""
+def test_size_rate_id_is_unique() -> None:
+    """The id of the rate of a size is made unique against the ids of the model."""
     system = system_of("""
-        compartment c = 2; c' = 1; species S in c = 10; n_S = 1
+        compartment c = 2; c' = 1; species S in c = 10; J0: S -> ; k*S; k = 0.1
+        dc_dt = 1
     """)
-    assert system.quantity("n_S_1").amount_of == "S"
+    assert [r.symbol.sid for r in system.size_rates] == ["dc_dt_1"]
+    assert odes(system)["S"].size_rate == "dc_dt_1"
 
 
 def test_local_parameter_is_renamed() -> None:
@@ -303,14 +344,14 @@ def test_rateof_of_state_and_constant() -> None:
 
 
 def test_rateof_of_a_concentration_in_a_variable_compartment() -> None:
-    """The rateOf of a concentration held as amount is d(n/V)/dt."""
+    """The rateOf of a concentration in a variable compartment is its ODE."""
     system = system_of("""
         compartment c = 2; c' = 1; species S in c = 10
         J0: S -> ; k*S; k = 0.1
         y := rateOf(S)
     """)
     assert math_of(system.assignments)["y"] == (
-        "(-J0 - S * 1) / c",
+        "-J0 / c - (S / c) * dc_dt",
         "assignment_rule",
     )
 
@@ -468,8 +509,8 @@ def test_event_fields_and_root() -> None:
     }
 
 
-def test_event_assigns_amount_of_species_in_variable_compartment() -> None:
-    """An event sets the amount with the size at the execution (test case 01779)."""
+def test_event_assigns_concentration_in_resized_compartment() -> None:
+    """An event converts a concentration with the sizes before and after (case 01779)."""
     system = system_of("""
         compartment C1 = 0.5; species $S1 in C1 = 2; species R in C1 = 1; R' = 0
         x := S1
@@ -478,7 +519,7 @@ def test_event_assigns_amount_of_species_in_variable_compartment() -> None:
     (event,) = system.events
     assert event_fields(event) == {
         "C1": ("0.2", None, None),
-        "n_S1": ("0.2", "C1", None),
+        "S1": ("0.2", "C1", "C1"),
         "R": (None, "R * C1", "C1"),
     }
 
@@ -510,9 +551,7 @@ def _rr_values(r: Any, system: OdeSystem) -> dict[str, float]:
     values: dict[str, float] = {"t": r.model.getTime()}
     for q in system.quantities:
         sid = q.symbol.sid
-        if q.amount_of is not None:
-            values[sid] = r[q.amount_of]
-        elif q.symbol.kind == "species" and not q.amount:
+        if q.symbol.kind == "species" and not q.amount:
             values[sid] = r[f"[{sid}]"]
         else:
             values[sid] = r[sid]
@@ -538,6 +577,7 @@ def _execute(
         new[a.variable] = value * (
             1.0 if a.scale is None else _evaluate(a.scale, before)
         )
+    # the size after the event, of a compartment the event assigns in these tests
     for a in event.assignments:
         if a.divisor is not None:
             new[a.variable] /= new[a.divisor]
@@ -600,7 +640,10 @@ def test_event_conversion_against_roadrunner(
 
 
 def test_simultaneous_events_against_roadrunner() -> None:
-    """An event executed after another one scales with the size the first one set."""
+    """An event executed after another one assigns the concentration as written.
+
+    The size the first event set is the size before and after the second one.
+    """
     roadrunner = pytest.importorskip("roadrunner")
     sbml = model_sbml("""
         compartment c = 1; c' = 1; species $S in c = 1
@@ -616,9 +659,9 @@ def test_simultaneous_events_against_roadrunner() -> None:
     expected = _execute(second, before, state)
     r.simulate(1 - EPSILON, 1 + EPSILON, 2)
     after = _rr_values(r, system)
-    assert expected == {"n_S": pytest.approx(20.0)}
-    assert after["n_S"] == pytest.approx(expected["n_S"], rel=1e-6)
-    assert after["S"] == pytest.approx(5.0, rel=1e-6)
+    assert expected == {"S": pytest.approx(5.0)}
+    assert after["S"] == pytest.approx(expected["S"], rel=1e-6)
+    assert after["c"] == pytest.approx(4.0, rel=1e-6)
 
 
 def test_event_without_id_and_trigger() -> None:
@@ -787,14 +830,16 @@ def test_rateof_of_an_expression_is_unsupported() -> None:
     assert OdeSystem.from_sbml(sbml).unsupported == (("rateOf of an expression", "y"),)
 
 
-def test_rateof_of_a_concentration_in_an_assigned_compartment_is_unsupported() -> None:
-    """d(n/V)/dt needs the derivative of an assignment rule of the compartment."""
+def test_rateof_of_a_concentration_in_an_assigned_compartment() -> None:
+    """The rateOf of a concentration in an assigned compartment is its dilution."""
     sbml = edit_sbml(
         model_sbml("compartment c; c := 1 + time; species S in c = 1; var y"),
         lambda m: _add_rule(m, "y", "rateOf(S)"),
     )
     system = OdeSystem.from_sbml(sbml)
-    assert system.unsupported == (("rateOf of an assigned variable", "y"),)
+    assert system.unsupported == ()
+    assert math_of(system.assignments)["y"] == ("-((S / c) * dc_dt)", "assignment_rule")
+    assert math_of(system.assignments)["dc_dt"] == ("1", "size_rate")
 
 
 def test_distrib_function_is_unsupported() -> None:
@@ -875,14 +920,14 @@ def test_compartment_without_size() -> None:
     assert "c" not in math_of(system.initial)
 
 
-def test_amount_state_takes_the_place_of_its_species() -> None:
-    """The amount of a species is a state at the position of the species."""
+def test_species_in_variable_compartment_keeps_its_position() -> None:
+    """A species in a variable compartment is a state at its position."""
     system = system_of("""
         compartment c = 1; c' = 1; compartment d = 1
         species A in c = 1; species B in d = 1; J0: A -> B; 1
     """)
-    assert system.states == ("c", "n_A", "B")
-    assert [q.symbol.sid for q in system.quantities][:5] == ["c", "d", "A", "n_A", "B"]
+    assert system.states == ("c", "A", "B")
+    assert [q.symbol.sid for q in system.quantities][:4] == ["c", "d", "A", "B"]
 
 
 def test_assigned_follows_the_dependencies() -> None:

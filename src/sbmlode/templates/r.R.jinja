@@ -261,14 +261,24 @@ event_conditions <- function(t, x, p) {
   ))
 }
 
+{% if e.functions.sizes %}
+# The sizes of the compartments the event {{ e.id }} changes, after its assignments.
+{{ e.functions.sizes }} <- function(t, x, p) {
+{% set text = body(e.scopes.sizes) | trim("\n") %}
+{% if text %}
+{{ text }}
+{% endif %}
+  as.numeric(c({% for c in e.sizes %}{{ c.code }}{{ ", " if not loop.last }}{% endfor %}))
+}
+
+{% endif %}
 # Execute the event {{ e.id }}: a list of the states x and the constants p with the
 # values.
 {% if e.assignments | selectattr("scale") | list %}
 #
-# The size of a compartment which scales a value is the size before the event: a
-# concentration held as its amount is assigned the amount of the new
-# concentration, a concentration with a rate rule keeps its amount when the size
-# of its compartment changes.
+# A concentration in a compartment whose size the event changes keeps its amount:
+# it is scaled with the size before the event and divided by the size after it,
+# `{{ e.functions.sizes }}`, evaluated with the values the event assigned.
 {% endif %}
 {{ e.functions.assign }} <- function(t, x, p, values) {
 {% set text = body(e.scopes.assign) | trim("\n") %}
@@ -282,8 +292,11 @@ event_conditions <- function(t, x, p) {
 {% elif a.scale is not none %}
 {% set value = value ~ " * " ~ a.scale %}
 {% endif %}
-{% if a.divisor_position is not none %}
-{% set value = value ~ " / values[[%d]]" % (a.divisor_position + 1) %}
+{% if a.divisor_index is not none %}
+{% if loop.first or loop.previtem.divisor_index is none %}
+  sizes <- {{ e.functions.sizes }}(t, x, p)
+{% endif %}
+{% set value = value ~ " / sizes[[%d]]" % (a.divisor_index + 1) %}
 {% endif %}
   {{ "x" if a.kind == "state" else "p" }}[[{{ a.index }}]] <- {{ value }}  # {{ a.id }}{% if a.comment %} {{ a.comment }}{% endif %}
 

@@ -3,7 +3,7 @@
 import libsbml
 import pytest
 from ode_helpers import edit_sbml, model_sbml
-from resources import REPRESSILATOR_SBML
+from resources import REPRESSILATOR_SBML, VARIABLE_COMPARTMENT
 
 from sbmlode import OdeSystem
 from sbmlode.documents import TypesetEquation, TypesetSystem
@@ -103,19 +103,33 @@ def test_local_parameter_element() -> None:
     assert r"\htmlData{id=k}" in typeset.reactions[0].lines[0]
 
 
-def test_amount_element() -> None:
-    """The amount of a species names the species."""
+def test_size_rate_element() -> None:
+    """The rate of a size names its compartment, a size of a rate rule is its ODE."""
     system = OdeSystem.from_sbml(
         model_sbml("""
             compartment c = 2; c' = 0.1; species S in c = 10
             J0: S -> ; k*S; k = 0.1
         """)
     )
-    amount = system.quantity("n_S")
-    assert amount.symbol.source == ("S",)
+    assert system.symbol("dc_dt").source == ("c",)
     typeset = system.typeset("latex", "id", _link)
-    lhs = {ode.variable.sid: ode.lhs for ode in typeset.odes if ode.variable}
-    assert r"\htmlData{id=S}{n_{S}}" in lhs["n_S"]
+    lines = {ode.variable.sid: ode.lines for ode in typeset.odes if ode.variable}
+    # the rate is one link, to the compartment
+    rate = r"\htmlData{id=c}{\frac{\mathrm{d} c}{\mathrm{d} t}}"
+    assert lines["S"][-1].endswith(rate)
+    assert typeset.dilution
+    assert [a.origin for a in typeset.assignments] == []
+
+
+def test_size_rate_of_an_assigned_compartment_is_typeset() -> None:
+    """The rate of a size with an assignment rule is an assignment of its own."""
+    system = OdeSystem.from_sbml(VARIABLE_COMPARTMENT)
+    typeset = system.typeset("latex", "id")
+    rates = [a for a in typeset.assignments if a.origin == "size_rate"]
+    assert [a.variable.source for a in rates if a.variable] == [("Va",)]
+    assert rates[0].lhs == r"\frac{\mathrm{d} \,\mathrm{Va}}{\mathrm{d} t}"
+    origins = {ode.variable.sid: ode.origin for ode in typeset.odes if ode.variable}
+    assert origins["B"] == "dilution"
 
 
 def test_event_and_unsupported_are_typed() -> None:

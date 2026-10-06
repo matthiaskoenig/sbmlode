@@ -283,16 +283,26 @@ def {{ e.functions["values"] }}(t: float, x: np.ndarray, p: np.ndarray) -> np.nd
     ], dtype=float)
 
 
+{% if e.functions.sizes %}
+def {{ e.functions.sizes }}(t: float, x: np.ndarray, p: np.ndarray) -> np.ndarray:
+    """The sizes of the compartments the event {{ e.id }} changes, after its assignments."""
+{% set lines = body(e.scopes.sizes) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return np.array([{% for c in e.sizes %}{{ c.code }}{{ ", " if not loop.last }}{% endfor %}], dtype=float)
+
+
+{% endif %}
 def {{ e.functions.assign }}(
     t: float, x: np.ndarray, p: np.ndarray, values: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
 {% if e.assignments | selectattr("scale") | list %}
     """Execute the event {{ e.id }}: the states x and the constants p with the values.
 
-    The size of a compartment which scales a value is the size before the event:
-    a concentration held as its amount is assigned the amount of the new
-    concentration, a concentration with a rate rule keeps its amount when the size
-    of its compartment changes.
+    A concentration in a compartment whose size the event changes keeps its amount:
+    it is scaled with the size before the event and divided by the size after it,
+    `{{ e.functions.sizes }}`, evaluated with the values the event assigned.
     """
 {% else %}
     """Execute the event {{ e.id }}: the states x and the constants p with the values."""
@@ -310,8 +320,11 @@ def {{ e.functions.assign }}(
 {% elif a.scale is not none %}
 {% set value = value ~ " * " ~ a.scale %}
 {% endif %}
-{% if a.divisor_position is not none %}
-{% set value = value ~ " / values[%d]" % a.divisor_position %}
+{% if a.divisor_index is not none %}
+{% if loop.first or loop.previtem.divisor_index is none %}
+    sizes = {{ e.functions.sizes }}(t, x, p)
+{% endif %}
+{% set value = value ~ " / sizes[%d]" % a.divisor_index %}
 {% endif %}
     {{ "x" if a.kind == "state" else "p" }}[{{ a.index }}] = {{ value }}  # {{ a.id }}{% if a.comment %} {{ a.comment }}{% endif %}
 

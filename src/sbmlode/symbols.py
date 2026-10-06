@@ -126,7 +126,7 @@ _GENERATED: dict[str, set[str]] = {
         "xids", "pids", "yids",
         # the events
         "event_conditions", "execute_events", "first_change", "DenseOutput",
-        "partial", "values", "interpolant", "t_old", "t_new", "t_low", "t_high",
+        "partial", "values", "sizes", "interpolant", "t_old", "t_new", "t_low", "t_high",
         "t_middle", "changed", "turned", "holds", "holds_now", "event_index",
         "event", "delay_time", "pending", "due", "scheduled", "ranks",
         "priority_value", "execution", "t_next", "t_stop", "max_step", "solver",
@@ -149,7 +149,7 @@ _GENERATED: dict[str, set[str]] = {
         "xt", "yt", "pt", "ys", "data", "columns", "index",
         # the events
         "event_conditions", "execute_events", "first_change", "extrapolation",
-        "Execution", "MAX_STEPS", "MAX_CASCADE", "values", "interpolant", "t_old",
+        "Execution", "MAX_STEPS", "MAX_CASCADE", "values", "sizes", "interpolant", "t_old",
         "t_new", "t_low", "t_high", "t_middle", "t_after", "changed",
         "turned", "holds", "holds_now", "event_index", "event", "delay_time",
         "pending", "due", "scheduled", "ranks", "priority_value", "execution",
@@ -184,7 +184,7 @@ _GENERATED: dict[str, set[str]] = {
         "t_low", "x_low", "interpolant", "t_after", "integrated", "t_next",
         "x_next", "beyond", "t_points", "output_row", "t_old", "t_new", "t_high",
         "t_middle", "turned", "executions", "event_index", "event", "delay_time",
-        "values", "scheduled", "due", "ranks", "position", "order_due", "chosen",
+        "values", "sizes", "scheduled", "due", "ranks", "position", "order_due", "chosen",
         "execution", "assigned", "time_change",
     },
 }  # fmt: skip
