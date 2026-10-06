@@ -1,4 +1,4 @@
-# ODE export
+# Guide
 
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it in six formats:
 
@@ -46,15 +46,15 @@ The options are passed as keyword arguments to `render` and `write`; an option t
 | `standalone` | `True` | typst, LaTeX, markdown: `True` writes a document which compiles on its own; `False` a fragment to include into a document of your own, see [Presentation formats](#presentation-formats). |
 | `symbols` | `"id"` | typst, LaTeX, markdown: `"id"` typesets every element with its id, `"name"` with its name if the name is a valid symbol, see [Symbols and names](#symbols-and-names). |
 
-`FORMATS` holds the formats by their name, each a `Format` with its template, suffixes, kind and options. The API is described in the [API reference](api/converters.ode.md).
+`FORMATS` holds the formats by their name, each a `Format` with its template, suffixes, kind and options. The API is described in the [API reference](api.md).
 
-`examples/converters/ode.py` writes all six formats of the repressilator (BIOMD0000000012, packaged as `sbmlutils.resources.REPRESSILATOR_SBML`), compiles the typst document and simulates the model with the python code:
+`scripts/docs_images.py` writes all six formats of the repressilator (BIOMD0000000012, a model of the tests in `tests/data/models/repressilator/`), compiles the typst document and simulates the model with the python code:
 
 ```bash
-python -m examples.converters.ode
+uv run python -m scripts.docs_images docs/images/ode
 ```
 
-The outputs on this page are written by this example.
+The outputs on this page are written by this script.
 
 ## Supported SBML
 
@@ -124,7 +124,7 @@ The arguments follow the convention of the solvers of each language:
 
 ### Python
 
-The python code needs numpy and pandas, which sbmlutils installs, and scipy for `simulate`, which the `examples` extra installs (`pip install "sbmlutils[examples]"`). Run as a script, the file prints the first rows of a simulation:
+The python code needs numpy, pandas and scipy, which the `simulate` extra installs (`pip install "sbmlode[simulate]"`); sbmlode itself writes the code without them. Run as a script, the file prints the first rows of a simulation:
 
 ```bash
 python repressilator.py
@@ -345,7 +345,7 @@ dY/dt = -Reaction2 + Reaction11
 dZ/dt = -Reaction3 + Reaction12
 ```
 
-The template can include the templates of the formats (`sbmlutils/resources/converters/ode`), and has the filters of their languages: `single_line`, `python_string`, `docstring`, `julia_text`, `julia_string`, `r_text` and `r_string`. The context holds plain strings, numbers, lists and dictionaries, never libsbml objects. The context of a code format (`python`, `julia`, `r`) holds:
+The template can include the templates of the formats (`sbmlode/templates`), and has the filters of their languages: `single_line`, `python_string`, `docstring`, `julia_text`, `julia_string`, `r_text` and `r_string`. The context holds plain strings, numbers, lists and dictionaries, never libsbml objects. The context of a code format (`python`, `julia`, `r`) holds:
 
 | key | content |
 | --- | --- |
@@ -360,11 +360,21 @@ The template can include the templates of the formats (`sbmlutils/resources/conv
 
 The context of a document (`typst`, `latex`, `markdown`) holds `model`, `units`, `compartments`, `species`, `parameters`, `functions`, `initial`, `assignments`, `reactions`, `odes`, `events`, `unsupported` and `options`, every text escaped and every math typeset for its markup. The keys are described in full in the docstrings of `sbmlode.formats` and `sbmlode.documents`.
 
-## Migration from odefac
+## Migration from sbmlutils
 
-`sbmlode` replaces `sbmlodefac`, which is removed together with its templates and `sbmlutils.converters.mathml.evaluableMathML`:
+sbmlode is the ODE export of sbmlutils 0.14.0 (`sbmlutils.converters.ode`) as a package of its own, with the same API and the same output apart from the line which names the version that wrote it. Replace the import:
 
-| odefac (0.13) | ode |
+| sbmlutils 0.14 | sbmlode |
+| --- | --- |
+| `from sbmlutils.converters.ode import OdeSystem` | `from sbmlode import OdeSystem` |
+| `sbmlutils.converters.ode.FORMATS`, `render`, `write`, `render_template` | `sbmlode.FORMATS`, `render`, `write`, `render_template` |
+| `sbmlutils.converters.ode.system`, `.printers`, `.formats`, ... | `sbmlode.system`, `sbmlode.printers`, `sbmlode.formats`, ... |
+
+From sbmlutils 0.15.0 on, `sbmlutils.converters.ode` re-exports the public API of sbmlode, so code written against sbmlutils keeps working. A custom template reads the version that wrote it as `model.sbmlode` instead of `model.sbmlutils`.
+
+The code generator `odefac` of sbmlutils 0.13 (`SBML2ODE`) was replaced by the ODE export in sbmlutils 0.14:
+
+| odefac (0.13) | sbmlode |
 | --- | --- |
 | `SBML2ODE.from_file(path)` | `OdeSystem.from_sbml(path)` |
 | `SBML2ODE(doc)` | `OdeSystem.from_sbml(doc)` |
@@ -374,7 +384,7 @@ The context of a document (`typst`, `latex`, `markdown`) holds `model`, `units`,
 
 The generated python code changes in the same way:
 
-| odefac (0.13) | ode |
+| odefac (0.13) | sbmlode |
 | --- | --- |
 | `xids`, `pids`, `yids` | `XIDS`, `PIDS`, `YIDS` |
 | `x0`, `p` | `x0, p = initial_values(P0)`, which evaluates the initial assignments |
@@ -383,8 +393,6 @@ The generated python code changes in the same way:
 | `f_z(X, T, p)` | `simulate(t_end)`, which returns the time, the states and the assigned values |
 
 A custom template of `odefac` has to be rewritten for the new context, see [Custom templates](#custom-templates): the names of its keys, the math in the printer of the format and the order of the arguments differ.
-
-The new export supports initial assignments, local parameters, function definitions, `rateOf`, events and every construct of the [table above](#supported-sbml), which `odefac` did not, and `create_model(..., create_markdown=True)` writes the new markdown.
 
 ## Verification
 
@@ -410,8 +418,8 @@ A curated subset of 67 cases, which covers every construct of SBML core, runs in
 `scripts/ode_report.py` runs the sweep, every case in a process of its own, and prints this table:
 
 ```bash
-python scripts/ode_report.py                               # python
-python scripts/ode_report.py --format julia --format r     # julia and R
+uv run python scripts/ode_report.py                            # python
+uv run python scripts/ode_report.py --format julia --format r  # julia and R
 ```
 
 <div class="doc-rendered" markdown>

@@ -1,6 +1,6 @@
-# ode
+# API reference
 
-The export of a model as its system of ordinary differential equations in python, julia, R, typst, LaTeX and markdown. The guide to it is [ODE export](../ode.md).
+The export of a model as its system of ordinary differential equations in python, julia, R, typst, LaTeX and markdown. The guide to it is the [Guide](formats.md), the typed data of an application is described in [Typed target](typeset.md).
 
 ::: sbmlode
 
@@ -11,3 +11,17 @@ The parts of an `OdeSystem`, the result of the analysis.
 ::: sbmlode.system
     options:
       filters: ["!^_", "!^OdeSystem$"]
+
+## The typeset system
+
+The typed data `OdeSystem.typeset` returns.
+
+::: sbmlode.documents
+    options:
+      members: ["TypesetSystem", "TypesetEquation", "TypesetEvent", "TypesetUnsupported", "TypesetModel", "TypesetUnit", "TypesetRow", "TypesetSpeciesRow", "TypesetAmount", "TypesetFunction", "TypesetReaction", "TypesetEventAssignment"]
+
+## Reading and units
+
+::: sbmlode.io
+
+::: sbmlode.units

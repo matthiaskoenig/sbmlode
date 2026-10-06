@@ -40,19 +40,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# what the python code the export writes runs with: numpy and pandas, and scipy,
+# which integrates it in `simulate`; sbmlode writes the code without them
+simulate = ["numpy>=2.2.2", "pandas>=2.2.2", "scipy>=1.15.0"]
 # what the tests need beyond the package: models written in antimony, the python
-# simulator the export writes (scipy), the reference simulations of the SBML test
-# suite (libroadrunner) and the compilation of typst
+# simulator the export writes (`simulate`), the reference simulations of the SBML
+# test suite (libroadrunner), the compilation of typst and the parsing of markdown
 test = [
+	"sbmlode[simulate]",
 	"pytest>=9.1.1",
 	"antimony>=3.1.3",
 	# the win_amd64 wheel of antimony 3.2.0 raises a C++ exception in loadAntimonyString
 	"antimony!=3.2.0; sys_platform == 'win32'",
-	"scipy>=1.15.0",
 	"libroadrunner>=2.10.0; python_version < '3.15'",
 	"typst>=0.15.0",
-	"numpy>=2.2.2",
-	"pandas>=2.2.2",
 	"markdown-it-py>=3.0.0",
 ]
 dev = [
@@ -84,7 +85,6 @@ only-include = [
 	"src",
 	"tests",
 	"tox.ini",
-	"lowest-overrides.txt",
 	"README.md",
 	"LICENSE",
 	"CITATION.cff",

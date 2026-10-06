@@ -1,0 +1,22 @@
+{
+  "upload_type": "software",
+  "title": "sbmlode: ordinary differential equations of SBML models",
+  "creators": [
+    {
+      "orcid": "0000-0003-1725-179X",
+      "affiliation": "Humboldt-University Berlin, Faculty of Life Science, Institute for Biology, Biology, Berlin; University Lübeck; University Hospital Schleswig-Holstein, Campus Lübeck, First Department of Medicine, Germany",
+      "name": "König, Matthias"
+    }
+  ],
+  "description": "<p><code>sbmlode</code> writes the system of ordinary differential equations of a model in the <a href=\"https://sbml.org\">Systems Biology Markup Language (SBML)</a> as python, julia and R code which simulates it and as LaTeX, typst and markdown documents which describe it, implemented on top of <code><a href=\"https://sbml.org/software/libsbml/\">libsbml</a></code> with source code available from <a href=\"https://github.com/matthiaskoenig/sbmlode\">https://github.com/matthiaskoenig/sbmlode</a></p><p>The code covers the semantics of SBML core, including initial assignments, rules, conversion factors and events, and is verified against roadrunner over the SBML test suite. The documents are used by <a href=\"https://sbml4humans.de\">SBML4Humans</a> to show the equations of a model.</p><p>The documentation is available at <a href=\"https://matthiaskoenig.github.io/sbmlode\">https://matthiaskoenig.github.io/sbmlode</a></p>",
+  "access_right": "open",
+  "license": "MIT",
+  "keywords": [
+    "SBML",
+    "Python",
+    "ODE",
+    "ordinary differential equations",
+    "code generation",
+    "modeling"
+  ]
+}

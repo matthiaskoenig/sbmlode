@@ -1,0 +1,364 @@
+name: CI-CD
+
+on:
+  push:
+    # feature branches are tested through their pull request, tags release
+    branches: [develop, main]
+    tags: ['*']
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+# least privilege by default, the release and sync jobs raise what they need
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # superseded branch runs are cancelled, release runs are never cancelled
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # the tools run with uvx are pinned, dependabot does not update them
+  TOX_VERSION: "4.64.5"
+  TOX_UV_VERSION: "1.36.0"
+  TWINE_VERSION: "7.0.0"
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      # tox-uv prefers the interpreters of the system; the tests run with the
+      # standalone interpreter uv manages, whose libpython is put on the
+      # library search path below
+      UV_PYTHON_PREFERENCE: only-managed
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # `py` (or none, as in the entries below) runs the environment of the
+        # python version, e.g. `py3.14`; another value runs that environment
+        tox-env: [py]
+        # Linux covers the full range with the reference simulations; Windows and
+        # macOS cover only its newest version, 3.14. A core-only 3.15 job on
+        # Linux is added below.
+        exclude:
+          - os: windows-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.13"
+        # Keep the full suite on 3.14 while libroadrunner lacks 3.15 wheels.
+        include:
+          - os: ubuntu-latest
+            python-version: "3.15"
+          # the suite against the lower bounds of the dependencies, see the
+          # `lowest` environment of tox.ini, which is pinned to python 3.11
+          - os: ubuntu-latest
+            python-version: "3.11"
+            tox-env: lowest
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv and set the python version
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        version: "0.12.21"
+        python-version: ${{ matrix.python-version }}
+        # a release run restores no cache, which zizmor cannot tell from the
+        # expression; the distributions are built without one, see `build`
+        enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+    - name: Put libpython on the library search path (linux only)
+      # the extension of libroadrunner links against libpython3.X.so.1.0. The
+      # standalone interpreters of uv ship it in their `lib` directory but are
+      # linked statically and never load it, so without this the import of
+      # roadrunner fails. tox passes LD_LIBRARY_PATH on to the tests.
+      if: runner.os == 'Linux'
+      env:
+        PYTHON_VERSION: ${{ matrix.python-version }}
+      run: |
+        uv python install "$PYTHON_VERSION"
+        prefix="$("$(uv python find --no-project "$PYTHON_VERSION")" -c 'import sys; print(sys.base_prefix)')"
+        echo "LD_LIBRARY_PATH=${prefix}/lib" >> "$GITHUB_ENV"
+      shell: bash
+    - name: Test with tox
+      env:
+        TOX_ENV: ${{ matrix.tox-env != 'py' && matrix.tox-env || format('py{0}', matrix.python-version) }}
+      run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e "${TOX_ENV}"
+      shell: bash
+
+  tests:
+    # the one check the branch protection requires; the names of the matrix
+    # jobs change with the matrix, this name does not
+    name: tests
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Check the result of the test matrix
+      env:
+        RESULT: ${{ needs.test.result }}
+      run: |
+        echo "test matrix: $RESULT"
+        test "$RESULT" = "success"
+
+  julia:
+    # the generated julia code, run with julia and the packages it uses, see the
+    # `julia` environment of tox.ini, in which a missing julia fails the tests.
+    # It informs and does not gate: it is deliberately not a check the branch
+    # protection requires, so that an outage of the julia toolchain does not block
+    # a merge. Installing and precompiling the
+    # julia packages takes long, so it runs only for a release (a tag) and on
+    # demand (`workflow_dispatch`), not for every pull request.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # the interpreter uv manages, see the `test` job
+      UV_PYTHON_PREFERENCE: only-managed
+      # the julia environment of the generated code, its packages with the major
+      # versions it is tested with; only it is loaded, not the default environment
+      JULIA_PROJECT: ${{ github.workspace }}/tests/julia
+      JULIA_LOAD_PATH: "@:@stdlib"
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv and set the python version
+      # the `julia` environment is pinned to python 3.14, see tox.ini
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        version: "0.12.21"
+        python-version: "3.14"
+        # a release run restores no cache, which zizmor cannot tell from the
+        # expression; the distributions are built without one, see `build`
+        enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+    - name: Put libpython on the library search path
+      # the extension of libroadrunner links against libpython, see the `test` job
+      run: |
+        uv python install 3.14
+        prefix="$("$(uv python find --no-project 3.14)" -c 'import sys; print(sys.base_prefix)')"
+        echo "LD_LIBRARY_PATH=${prefix}/lib" >> "$GITHUB_ENV"
+      shell: bash
+    - name: Install julia
+      uses: julia-actions/setup-julia@fa02766e078afaaf09b14210362cee14137e6a32  # v3.0.2
+      with:
+        version: "1.11"
+    - name: Cache the julia packages
+      # a release run restores no cache, see the cache of uv above
+      if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      uses: julia-actions/cache@e32267b41e0fa7df82a3d53e8c7273620d52c586  # v3.4.0
+    - name: Install the julia packages
+      # the packages of the generated code (the integrators, the table of a
+      # simulation and the math) of the environment `JULIA_PROJECT`, resolved
+      # within the `[compat]` bounds of its Project.toml, which has no committed
+      # Manifest, so it is resolved first. `Pkg.resolve` does not install the General
+      # registry into a fresh depot (`Pkg.instantiate` and `Pkg.add` would), so it is
+      # added first; on a depot which has it, this updates it
+      run: julia -e 'using Pkg; Pkg.Registry.add("General"); Pkg.resolve(); Pkg.instantiate(); Pkg.precompile()'
+    - name: Test with tox
+      run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e julia
+
+  R:
+    # the generated R code, run with Rscript and deSolve, see the `R` environment
+    # of tox.ini, in which a missing R fails the tests. It runs for every pull
+    # request and is a check the branch protection requires: the R code is a
+    # format of the package.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # the interpreter uv manages, see the `test` job
+      UV_PYTHON_PREFERENCE: only-managed
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv and set the python version
+      # the `R` environment is pinned to python 3.14, see tox.ini
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        version: "0.12.21"
+        python-version: "3.14"
+        # a release run restores no cache, which zizmor cannot tell from the
+        # expression; the distributions are built without one, see `build`
+        enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+    - name: Put libpython on the library search path
+      # the extension of libroadrunner links against libpython, see the `test` job
+      run: |
+        uv python install 3.14
+        prefix="$("$(uv python find --no-project 3.14)" -c 'import sys; print(sys.base_prefix)')"
+        echo "LD_LIBRARY_PATH=${prefix}/lib" >> "$GITHUB_ENV"
+      shell: bash
+    - name: Install R
+      # sets R_LIBS_USER, the library deSolve is installed into, which tox passes on
+      uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05  # v2.14.0
+      with:
+        r-version: "4.4"
+        # binary packages of the Posit package manager, deSolve installs in seconds
+        use-public-rspm: true
+    - name: Install deSolve
+      # the package of `simulate` of the generated code, the rest of it is base R;
+      # `install.packages` only warns if it fails, the check fails the step
+      run: |
+        Rscript -e 'install.packages("deSolve", repos = "https://cloud.r-project.org")'
+        Rscript -e 'if (!requireNamespace("deSolve", quietly = TRUE)) quit(status = 1)'
+    - name: Test with tox
+      run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e R
+
+  latex:
+    # the documents of the ODE export compiled, LaTeX with tectonic and typst with
+    # the typst package, see the `latex` environment of tox.ini, in which a missing
+    # toolchain fails the tests. It runs for every pull request and is a check the
+    # branch protection requires: the documents are formats of the package.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # the interpreter uv manages, see the `test` job
+      UV_PYTHON_PREFERENCE: only-managed
+      # the release of tectonic and the checksum of its archive, so that the
+      # binary is the one which was reviewed
+      TECTONIC_VERSION: "0.17.0"
+      TECTONIC_SHA256: "8533d07f9ccbd7a65824b9e0459041bca34af1eb33daba48f59215593753a3b7"
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv and set the python version
+      # the `latex` environment is pinned to python 3.14, see tox.ini
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        version: "0.12.21"
+        python-version: "3.14"
+        # a release run restores no cache, which zizmor cannot tell from the
+        # expression; the distributions are built without one, see `build`
+        enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+    - name: Install tectonic
+      # the statically linked binary of the release; tectonic downloads the TeX
+      # packages a document uses at its first run
+      run: |
+        archive="tectonic-${TECTONIC_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+        curl --fail --silent --show-error --location --output "${RUNNER_TEMP}/${archive}" \
+          "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/${archive}"
+        echo "${TECTONIC_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check
+        mkdir -p "${RUNNER_TEMP}/tectonic"
+        tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/tectonic"
+        echo "${RUNNER_TEMP}/tectonic" >> "$GITHUB_PATH"
+      shell: bash
+    - name: Test with tox
+      run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e latex
+
+  build:
+    # builds the distributions of a release without any write permission; the
+    # jobs which publish them only download what was built here
+    needs: [tests, R, latex]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install uv
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      with:
+        version: "0.12.21"
+        python-version: "3.14"
+        # a release is built from a clean state, never from a restored cache
+        enable-cache: false
+    - name: Check the release notes exist
+      # found here rather than in `github-release`, which runs after the upload to PyPI
+      run: test -f "release-notes/${GITHUB_REF_NAME}.md"
+    - name: Build the package
+      # --no-sources: built the way a user builds it, without uv specific sources
+      run: uv build --no-sources
+    - name: Check the package
+      run: uvx "twine@${TWINE_VERSION}" check --strict dist/*
+    - name: Upload the distributions
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: dist
+        path: dist/
+        if-no-files-found: error
+
+  publish:
+    # the only job which can publish to PyPI, by trusted publishing through the
+    # `pypi` environment; nothing is checked out and nothing is built here
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sbmlode
+    permissions:
+      id-token: write  # trusted publishing to PyPI
+    steps:
+    - name: Download the distributions
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      with:
+        name: dist
+        path: dist/
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+      with:
+        packages-dir: dist/
+        # PEP 740 attestations, signed with the identity of this workflow
+        attestations: true
+
+  github-release:
+    # created once the package is on PyPI
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # create the GitHub release
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Create GitHub release
+      # the GitHub cli of the runner, no third party action gets write access
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: >-
+        gh release create "$TAG"
+        --repo "$GITHUB_REPOSITORY"
+        --verify-tag
+        --title "$TAG"
+        --notes-file "release-notes/${TAG}.md"
+
+  sync-main:
+    # main tracks the latest published release, see docs/development.md
+    needs: [publish, github-release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # fast-forward main to the released commit
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        # a shallow clone cannot be pushed to another branch
+        fetch-depth: 0
+        # the push below needs the credentials, nothing else runs in this job
+        persist-credentials: true
+    - name: Fast-forward main to the release
+      # no --force: the push fails loudly if it would not be a fast-forward
+      run: git push origin HEAD:main

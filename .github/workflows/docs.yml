@@ -1,0 +1,75 @@
+name: documentation
+
+on:
+  push:
+    # feature branches are built through their pull request
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # a superseded pull request build is cancelled; a push is never cancelled,
+  # the deployment it starts would be left half published
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    # required by the branch protection, see .github/rulesets/develop.json
+    name: docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure GitHub Pages
+        # a pull request builds the site but never deploys it
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.12.21"
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install the locked dependencies (fails if uv.lock is out of date with pyproject.toml, run `uv lock`)
+        # `--locked` refuses to update the lock: a change of the dependencies
+        # in pyproject.toml has to come with the `uv lock` which records it
+        run: uv sync --locked --extra dev
+      - name: Check that the release notes page is current
+        run: uv run python -m scripts.releasenotes --check
+      - name: Write the export of the repressilator
+        # docs/formats.md shows the pages of the typst document, which are compiled
+        # here and not committed (deterministic, typst's own fonts only), and the
+        # text files of the export, which are committed and written again here
+        run: uv run python -m scripts.docs_images docs/images/ode
+      - name: Build the documentation
+        # the API reference is rendered from the docstrings by mkdocstrings, so the
+        # package has to be importable; --strict turns a broken link into a failure
+        run: uv run zensical build --clean --strict
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: docs
+    # only the default branch publishes to https://matthiaskoenig.github.io/sbmlode
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write     # deploy to GitHub Pages
+      id-token: write  # verify the deployment originates from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
