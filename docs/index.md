@@ -1,3 +1,5 @@
+![sbmlode logo](images/favicon/sbmlode-200x200.png){ width="100" }
+
 # sbmlode
 
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it

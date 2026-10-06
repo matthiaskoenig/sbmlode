@@ -28,6 +28,13 @@ RELEASES_URL = "https://github.com/matthiaskoenig/sbmlode/releases"
 # page of all releases does not repeat under every version
 SIGN_OFF = "Your sbmlode team"
 
+# the logo under the title of the notes heads the GitHub release, the site shows
+# it in its header instead of under every version
+LOGO = (
+    '<img src="https://raw.githubusercontent.com/matthiaskoenig/sbmlode/develop/'
+    'docs/images/favicon/sbmlode-200x200.png" alt="sbmlode logo" width="100">'
+)
+
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _HEADING = re.compile(r"^(#+) ")
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -94,8 +101,8 @@ def section(version: str, notes: str) -> str:
     """The notes of one release as a section of the page.
 
     The title of the file gives way to the heading of the version, every other
-    heading moves one level down below it, and the greeting at the end of the
-    notes is left out. A `#` inside a fenced code block is not a heading.
+    heading moves one level down below it, and the logo under the title and the
+    greeting at the end of the notes are left out. A `#` inside a fenced code block is not a heading.
 
     Args:
         version: the version of the release.
@@ -109,7 +116,7 @@ def section(version: str, notes: str) -> str:
     for line in notes.strip().splitlines():
         if _FENCE.match(line):
             fenced = not fenced
-        if not fenced and line.strip() == SIGN_OFF:
+        if not fenced and line.strip() in (LOGO, SIGN_OFF):
             continue
         heading = None if fenced else _HEADING.match(line)
         if heading is None:

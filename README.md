@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/matthiaskoenig/sbmlode/develop/docs/images/favicon/sbmlode-200x200.png" alt="sbmlode logo" width="100">
+
 # sbmlode
 
 [![PyPI](https://img.shields.io/pypi/v/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![CI-CD](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml) [![Documentation](https://img.shields.io/badge/docs-zensical-teal)](https://matthiaskoenig.github.io/sbmlode/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
