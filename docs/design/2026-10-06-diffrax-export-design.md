@@ -15,7 +15,7 @@ A new code format `diffrax` writes a self contained python file whose `simulate`
 | Purpose | A JAX native model: `jit`, `vmap` and `grad` of `simulate` for every model. |
 | Events | All SBML event semantics (trigger initial values, delays, priorities, persistence, values from the trigger time, cascades) inside JAX, so that the transformations work for a model with events as well. |
 | Shape | A new format `diffrax` with its own template and math dialect; the file carries its whole simulator as the python, julia and R files do. No runtime module in sbmlode, which keeps its dependencies `python-libsbml` and `jinja2`, and no `backend` option of the python format, whose simulator shares nothing with this one. |
-| Interface | `simulate(ts, p=None, x0=None, ...)` with the output times `ts` and flat arrays `p` and `x0` in the order of `PIDS` and `XIDS`, returning a `NamedTuple` of arrays; `to_frame` converts it to pandas outside of `jit`. |
+| Interface | `simulate(ts, p=None, x0=None, ...)`, differentiated as diffrax's `adjoint` says, with the output times `ts` and flat arrays `p` and `x0` in the order of `PIDS` and `XIDS`, returning a `NamedTuple` of arrays; `to_frame` converts it to pandas outside of `jit`. |
 | Precision | The file enables float64 (`jax_enable_x64`) on import: without it the tolerances which reproduce roadrunner cannot be met. |
 | Python | sbmlode requires python >= 3.12, the version jax requires; python 3.11 is dropped for the whole package. |
 
@@ -65,7 +65,8 @@ class Simulation(NamedTuple):
 
 @eqx.filter_jit
 def simulate(ts, p=None, x0=None, *, rtol=1e-8, atol=1e-10, solver=None,
-             max_step=None, max_steps=100_000, ...) -> Simulation: ...
+             adjoint=None, max_step=None, max_steps=100_000,
+             max_segments=100_000, max_pending=100) -> Simulation: ...
 
 def to_frame(simulation: Simulation) -> pd.DataFrame: ...
 
@@ -76,6 +77,8 @@ if __name__ == "__main__":
 The semantics are the ones of the python `simulate`. The integration starts at t = 0, where the initial values and the events at t = 0 apply; `ts` are the output times, a non-decreasing array with `ts[0] >= 0` whose length is the static shape of the result. `p` defaults to `P0`, `initial_values(p)` computes the constants set by initial assignments, `x0`, if given, replaces the initial states. `y` is `f_y` mapped over the saved times, states and constants. `to_frame` writes the columns of the python `DataFrame`: `time`, the states, the assigned values and the constants which events change; it imports pandas itself.
 
 The solver is `diffrax.Kvaerno5()` (implicit, L-stable, order 5, SBML models are often stiff) with `diffrax.PIDController(rtol, atol, dtmax=max_step)`; `rtol=1e-8` and `atol=1e-10` are the defaults of the python export, `max_step` defaults to `ts[-1] / (len(ts) - 1)`, the spacing of the output times of the python export (`t_end / (points - 1)`) for `ts = linspace(0, t_end, points)`, and to no limit for a single output time, `max_steps` limits the steps of every `diffeqsolve`, which raises beyond it (`throw=True`). `solver` takes any diffrax solver, `diffrax.Tsit5()` for a model which is not stiff.
+
+`adjoint` is the adjoint of diffrax, which decides how `simulate` is differentiated, as it does for `diffeqsolve`: `diffrax.RecursiveCheckpointAdjoint()`, the default, for reverse mode (`grad`), `diffrax.ForwardMode()` for forward mode (`jvp`, `jacfwd`), `diffrax.DirectAdjoint()` for both at a higher cost. The loops of the event engine follow it, see below.
 
 `eqx.filter_jit` traces the arrays `ts`, `p` and `x0` and holds every other argument static: a new tolerance or solver compiles anew, new parameters do not. `vmap` and `grad` over `p` and `x0` are applied from outside.
 
@@ -104,29 +107,34 @@ A `NamedTuple` carried through the loops: the time `t`, the states `x`, the cons
 2. The loop of segments, while `t < ts[-1]`:
    - `t_stop = min(ts[-1], the earliest scheduled time)`: a delayed execution ends a segment exactly, without a root finding.
    - `diffeqsolve` from `t` to `t_stop` with a `diffrax.Event` of one condition per trigger, `where(holds_k, -root_k, root_k)`, `direction=True`, and the root finder `optx.Newton`: only a change away from `holds` stops the integration, so that a trigger which starts at its root, `time >= 1` at t = 1 after it fired, is not found again.
-   - At a stop at a root, the time is refined to the first time at which the exact `event_conditions` differ from `holds`, as `first_change` of julia does it: bisection on the linear extrapolation of the states within 1e-13 (relative) of the root. `time >= 1` changes at 1, `time > 1` right after it.
+   - At a stop at a root, the time is refined to the first time at which the exact `event_conditions` differ from `holds`, as `first_change` of julia does it: bisection (64 halvings) on the linear extrapolation of the states within 1e-10 (relative) of the root, which `optx.Newton` locates to 1e-12; a trigger which keeps its value at its root changes 1e-13 (relative) after it, as in julia, so that a delay added to it keeps the execution after an output time at the sum. `time >= 1` changes at 1, `time > 1` right after it.
    - The output times inside `(t, t_stop)` take the states saved by the segment (`SaveAt(ts=clip(ts, t, t_stop))`, masked), an output time at `t_stop` (to 1e-14 relative) the states after its events, as in python.
    - `execute_events` at `t_stop`.
 3. `execute_events`, the cascade of python on arrays: a trigger which turned true schedules an execution at `t + delay` (with its values if it uses the values from the trigger time), a trigger of a non-persistent event which turned false drops its executions; of the executions due, the one of the highest priority is executed, ties in the order of the events, then of their scheduling; the triggers are evaluated anew until no execution is due.
 
 ### Differentiability
 
-The event times carry their gradients. The time of a root is differentiated by diffrax through the root finder (implicit function theorem); the refinement is an offset of at most 1e-13 under `lax.stop_gradient`; a delayed time is `t + delay(t, x, p)`, which is traced. The discrete decisions (which event, which priority) are piecewise constant. Forward mode (`jvp`, `jacfwd`) passes any loop; reverse mode (`grad`) needs loops which JAX can reverse: `lax.scan` over a static bound with `lax.cond` skipping the iterations after the end, or the checkpointed while loop of equinox (`equinox.internal.while_loop`, which diffrax uses itself, an internal interface). The spike decides, for the loop of segments and the cascade.
+The event times carry their gradients. The time of a root is differentiated by diffrax through the root finder (implicit function theorem); the refinement is an offset of at most 1e-13 under `lax.stop_gradient`; a delayed time is `t + delay(t, x, p)`, which is traced. The discrete decisions (which event, which priority) are piecewise constant. The loop of segments and the cascade are `equinox.internal.while_loop`, the loop diffrax builds its own adjoints on, with the kind which matches the adjoint: `"checkpointed"` for `RecursiveCheckpointAdjoint` (reverse mode, which a `lax.while_loop` does not support), `"lax"` for `ForwardMode` (forward mode, which the checkpointed loop does not support), `"bounded"` for `DirectAdjoint` (both). `equinox.internal` is not a public interface of equinox; diffrax depends on it, the lower bound of equinox in the extra and the tests guard it.
 
 ### Limits and errors
 
-The limits of the python export plus the two which fixed shapes need, each raising inside `jit` with the message of python (`eqx.error_if`, `diffeqsolve(throw=True)`): `max_steps` per segment (100000), `MAX_CASCADE` executions at one time (10000), and the static arguments `max_segments` and `max_pending`, whose defaults the spike sets. Under `vmap`, an error of one member of the batch raises for the batch.
+The limits of the python export plus the two which fixed shapes need, each raising inside `jit` with the message of python (`eqx.error_if`, `diffeqsolve(throw=True)`): `max_steps` per segment (100000), `MAX_CASCADE` executions at one time (10000), and the static arguments `max_segments` (100000 segments of integration) and `max_pending` (100 scheduled executions at a time). Under `vmap`, an error of one member of the batch raises for the batch.
 
 ## Spike
 
-The first step of the work, its code is thrown away. One model with a trigger crossing which depends on a parameter, a delayed event and a non-persistent event, written by hand in the shape of the generated file:
+The first step of the work, its code thrown away: a model written by hand in the shape of the generated file, with a trigger crossing which depends on parameters (a repeated dose), a delayed event with a strict trigger (`time > 1`), a non-persistent delayed event with the values from the trigger time, and an event with a non-strict trigger (`time >= 2`) which assigns a constant; roadrunner, through antimony, as the reference. Result, with jax 0.11.2, diffrax 0.7.2, equinox 0.13.8, optimistix 0.1.0 on python 3.14:
 
-1. `jax.grad` of a loss of `simulate` agrees with central finite differences (relative 1e-5), the shift of the event time included;
-2. `jit` and `vmap` over 100 parameter sets;
-3. `time >= 1` and `time > 1` stop where the python export stops;
-4. the time of compilation and of a run, for both loop constructions.
+| Check | Result |
+|---|---|
+| trajectory against roadrunner (`rtol=1e-8`) | 1.7e-7 relative, the same for the three kinds of loops |
+| `grad` (`"checkpointed"`, `"bounded"`) and `jacfwd` (`"lax"`, `"bounded"`) against central finite differences | 1e-8 relative, the shift of the event times and the delay included |
+| `vmap` over 100 parameter sets | equal to the single runs to 4e-13 |
+| `time > 1` with a delay, `time >= 2` | as roadrunner, after julia's rule for a trigger which keeps its value at its root |
+| compilation, `simulate` | 1.2 to 1.6 s |
+| compilation, `grad` | 6 to 7 s (`"checkpointed"`), 16 to 20 s (`"bounded"`) |
+| `max_segments=100000`, `max_pending=64` against 1000 and 16 | no cost for `"checkpointed"`, 25 % more compilation for `"bounded"` |
 
-The loop construction is chosen by correctness first, then by the time of compilation; the result, the loop construction and the defaults of `max_segments` and `max_pending` are recorded in this document.
+The decisions recorded above follow from it: the kind of the loops from the adjoint, the defaults of `max_segments` and `max_pending`, the refinement of a root.
 
 ## Dependencies
 
@@ -135,9 +143,9 @@ The package keeps `python-libsbml` and `jinja2`. A new extra `diffrax` lists wha
 ## Testing
 
 - `test_ode_printers.py`: the dialect `jax` against golden strings for every type of AST node, and its evaluation against roadrunner over the formulas which cover every construct of the math.
-- `test_ode_diffrax.py`: `initial_values`, `f_dxdt`, `f_y` and `simulate` against roadrunner for the test models, with the tolerances of the python export (`rtol=1e-6`, `atol=1e-9`, relaxed to `1e-4` and `1e-6` with events); the contract of JAX: `jit`, `vmap` over `p` equal to a loop of single runs, `grad` and `jacfwd` equal to central finite differences for a model without events and for a model whose event time depends on the parameter; a file with `simulator=False` composed into a `diffeqsolve`; `max_pending`, `max_segments` and `MAX_CASCADE` raise.
+- `test_ode_diffrax.py`: `initial_values`, `f_dxdt`, `f_y` and `simulate` against roadrunner for the test models, with the tolerances of the python export (`rtol=1e-6`, `atol=1e-9`, relaxed to `1e-4` and `1e-6` with events); the contract of JAX: `jit`, `vmap` over `p` equal to a loop of single runs, `grad` and `jacfwd` (with `ForwardMode`) equal to central finite differences for a model without events and for a model whose event time depends on the parameter, for the three adjoints; a file with `simulator=False` composed into a `diffeqsolve`; `max_pending`, `max_segments` and `MAX_CASCADE` raise.
 - `test_ode_safety.py` runs over all formats and so covers the injection and SId tests of `diffrax`; `test_ode_docs.py` its output in the documentation.
-- `test_ode_testsuite.py`: every case the python export passes, the diffrax export passes; a known failure is a strict xfail with its reason. The full sweep runs behind the `sbml_testsuite` marker, `scripts/ode_report.py --format diffrax` reports the pass rate. If the curated cases cost more than about 5 minutes of compilation on CI, the default run takes `CURATED_DIFFRAX`, a subset with every feature tag (events, delays, priorities and persistence included), and the others stay in the sweep; the times of the spike decide.
+- `test_ode_testsuite.py`: every case the python export passes, the diffrax export passes; a known failure is a strict xfail with its reason. The full sweep runs behind the `sbml_testsuite` marker, `scripts/ode_report.py --format diffrax` reports the pass rate. If the curated cases cost more than about 5 minutes of compilation on CI, the default run takes `CURATED_DIFFRAX`, a subset with every feature tag (events, delays, priorities and persistence included), and the others stay in the sweep. With 1 to 2 s of compilation of `simulate` per model in the spike, the curated cases are expected to fit; the times measured on CI decide.
 
 ## Continuous integration
 
@@ -145,7 +153,7 @@ No job of its own: jax installs from wheels on linux, macos and windows, the tes
 
 ## Documentation
 
-- `docs/formats.md`: a section `diffrax` with the writing (`fmt="diffrax"`), the interface (`simulate(ts, p, x0)`, `Simulation`, `to_frame`), examples of `jit`, `vmap` and `grad`, float64 as a switch of the process, the gradient of `where`, the choice of the solver, `max_segments` and `max_pending`.
+- `docs/formats.md`: a section `diffrax` with the writing (`fmt="diffrax"`), the interface (`simulate(ts, p, x0)`, `Simulation`, `to_frame`), examples of `jit`, `vmap`, `grad` and `jacfwd` with the adjoints, float64 as a switch of the process, the gradient of `where`, the choice of the solver, `max_segments` and `max_pending`.
 - The repressilator as diffrax file in `docs/images/ode/`, written by `scripts/docs_images`.
 - The README, `docs/index.md` and `CLAUDE.md` name the format, the extra and python 3.12.
 - The release notes of 0.3.0 are written with the release.
