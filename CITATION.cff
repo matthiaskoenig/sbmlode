@@ -13,8 +13,8 @@ identifiers:
     value: 10.5281/zenodo.23179199
     description: the concept doi of all versions
   - type: doi
-    value: 10.5281/zenodo.23179200
-    description: the doi of version 0.1.0
+    value: 10.5281/zenodo.23184677
+    description: the doi of version 0.2.0
 version: "0.2.0"
 date-released: "2026-10-06"
 doi: "10.5281/zenodo.23179199"
