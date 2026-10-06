@@ -67,13 +67,11 @@ $ upright("mm")(S, upright("km")) &= (S)/(upright("km") + S) $
 
 The initial assignments set the values at $t = 0$:
 
-$ S &= S_(0) \
-  n_(A) &= A dot V $
+$ S &= S_(0) $
 
 The assignment rules hold at every time $t$:
 
-$ A &= (n_(A))/(V) \
-  k_(2) &= 2 dot k_(1) $
+$ k_(2) &= 2 dot k_(1) $
 
 = Reactions
 
@@ -101,10 +99,10 @@ The states change in time with the rates of the reactions and the rate rules:
 $ (dif V)/(dif t) &= 0.1 quad "(rate rule)" \
   (dif S)/(dif t) &= (-v_("J0") - v_("J1"))/(c) \
   (dif P)/(dif t) &= (v_("J0") + 2 dot v_("J1"))/(c) \
-  (dif n_(A))/(dif t) &= -v_("J1") \
+  (dif A)/(dif t) &= (-v_("J1"))/(V) - (A)/(V) dot (dif V)/(dif t) \
   (dif B)/(dif t) &= -0.1 dot B quad "(rate rule)" $
 
-The species $A$ in the compartment $V$ of variable size is integrated as its amount $n_(A)$, its concentration is $A = n_(A) \/ V$.
+The concentration of a species in a compartment whose size changes is diluted by the rate of the size (SBML Level 3 Version 2, section 3.4.6), the amount it holds is kept.
 
 = Events
 
@@ -116,9 +114,12 @@ The species $A$ in the compartment $V$ of variable size is integrated as its amo
 
 $ V &colon.eq 2 dot V \
   S &colon.eq 10 \
+  A &colon.eq (A dot V)/(V^("new")) \
   B &colon.eq (B dot V)/(V^("new")) $
 
-$B$ is converted from the size of $V$ at the execution of the event to the size $V^("new")$ the event assigns, so that its amount is kept.
+$A$ is converted from the size of $V$ before the event to its size $V^("new")$ after the event, so that its amount is kept.
+
+$B$ is converted from the size of $V$ before the event to its size $V^("new")$ after the event, so that its amount is kept.
 
 *Event `E2`*
 
@@ -126,7 +127,5 @@ $B$ is converted from the size of $V$ at the execution of the event to the size 
 - Delay: $1$
 - `initialValue` true, `persistent` true, `useValuesFromTriggerTime` true
 
-$ n_(A) &colon.eq V \
+$ A &colon.eq 1 \
   upright("total") &colon.eq upright("total") + 1 $
-
-$n_(A)$ is the amount of $A$, the assigned concentration times the size of $V$ at the execution of the event.

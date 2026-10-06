@@ -21,12 +21,11 @@ The context of a code format holds:
   dict with `id`, `name`, `unit`, `code` (the name in the code), `index` (from
   `Format.first_index`), `value` (a literal of the default value, `None` if it has
   none), `comment` (name and unit, e.g. `species A [mmol/l]`, without a name which
-  is the id), `kind` (of the symbol, e.g. `species`) and `amount_of`, the species
-  whose amount it is;
+  is the id) and `kind` (of the symbol, e.g. `species`);
 - `functions`: the function definitions with `code`, `name`, `arguments` (their
   names in the code) and `body`;
 - `initial`, `assignments`: the initial values at t=0 and the assignments (rules,
-  concentrations of amounts, reaction rates) in the order of their evaluation, each
+  rates of the sizes, reaction rates) in the order of their evaluation, each
   with `id`, `code`, `expr`, `comment`, `origin` and `role`; a reaction rate is
   written under the id of its reaction;
 - `odes`: the right hand side of each state with `id`, `code`, `index`, `expr` and
@@ -35,13 +34,16 @@ The context of a code format holds:
   name which is the id), `trigger` (a condition), `root` (its continuous root
   function), `initial_value`, `persistent`, `delay`, `priority`,
   `use_trigger_values`, `assignments`, each with `id`, `code`, `kind` (`state` or
-  `constant`), `index`, `comment`, `expr`, `scale` and `divisor_position` (the
-  0-based position in `assignments` of the assignment whose new value divides it,
-  independent of `Format.first_index`, see `system.EventAssignment`), `functions`,
-  the names of the functions the code writes for the event (`delay`, `priority`,
-  `values`, `assign`, unique against the names of the ids and the reserved names
-  of the language; `delay` and `priority` are `None` without math), and `scopes`,
-  the scope of each of these functions (`assign` the scope of the scales); a
+  `constant`), `index`, `comment`, `expr`, `scale` and `divisor_index` (the
+  0-based position in `sizes` of the size after the event which divides it,
+  independent of `Format.first_index`, see `system.EventAssignment`; the
+  assignments with a divisor come last), `sizes`, the compartments whose size
+  after the event divides an assignment, each with `id`, `code` and `index`
+  (0-based), `functions`, the names of the functions the code writes for the event
+  (`delay`, `priority`, `values`, `assign`, `sizes`, unique against the names of
+  the ids and the reserved names of the language; `delay` and `priority` are
+  `None` without math, `sizes` without sizes), and `scopes`, the scope of each of
+  these functions (`assign` the scope of the scales, `sizes` of the sizes); a
   template reads the key `values` as `functions["values"]`, `functions.values` is
   the method of the dict;
 - `event_constants`: the constants which an event assigns, entries of `constants`
@@ -74,7 +76,7 @@ import jinja2
 import libsbml
 
 import sbmlode
-from sbmlode.astutil import walk
+from sbmlode.astutil import name, walk
 from sbmlode.dependencies import names
 from sbmlode.documents import DocumentContext
 from sbmlode.printers import PRINTERS, MathPrinter
@@ -324,6 +326,7 @@ class _CodeContext:
         ids.extend(r.symbol.sid for r in system.reactions)
         ids.extend(f.symbol.sid for f in system.functions)
         ids.extend(e.symbol.sid for e in system.events)
+        ids.extend(r.symbol.sid for r in system.size_rates)
         self.codes = code_names(ids, fmt.printer)
         self.quantities = {q.symbol.sid: q for q in system.quantities}
         self.printed: list[str] = []
@@ -365,7 +368,6 @@ class _CodeContext:
             "value": self.value(quantity.value) if quantity else None,
             "comment": _comment(symbol),
             "kind": symbol.kind,
-            "amount_of": quantity.amount_of if quantity else None,
         }
 
     def assignment(
@@ -479,7 +481,7 @@ class _CodeContext:
     ) -> dict[str, object]:
         """The entry of an event."""
         event = self.system.events[index]
-        variables = [a.variable for a in event.assignments]
+        sizes = list(dict.fromkeys(a.divisor for a in event.assignments if a.divisor))
         assignments = []
         for a in event.assignments:
             variable = by_id[a.variable]
@@ -492,9 +494,9 @@ class _CodeContext:
                     "comment": variable["comment"],
                     "expr": self.expr(a.math),
                     "scale": self.expr(a.scale),
-                    "divisor_position": None
+                    "divisor_index": None
                     if a.divisor is None
-                    else variables.index(a.divisor),
+                    else sizes.index(a.divisor),
                 }
             )
         symbol = event.symbol
@@ -514,6 +516,10 @@ class _CodeContext:
             "priority": self.expr(event.priority),
             "use_trigger_values": event.use_values_from_trigger_time,
             "assignments": assignments,
+            "sizes": [
+                {"id": cid, "code": self.codes[cid], "index": j}
+                for j, cid in enumerate(sizes)
+            ],
             "functions": {
                 "delay": None
                 if event.delay is None
@@ -523,12 +529,14 @@ class _CodeContext:
                 else self.unique(f"event_priority_{code}"),
                 "values": self.unique(f"event_values_{code}"),
                 "assign": self.unique(f"event_assign_{code}"),
+                "sizes": self.unique(f"event_sizes_{code}") if sizes else None,
             },
             "scopes": {
                 "delay": self.math_scope([event.delay]),
                 "priority": self.math_scope([event.priority]),
                 "values": self.math_scope(values),
                 "assign": self.math_scope(scales),
+                "sizes": self.math_scope([name(cid) for cid in sizes]),
             },
         }
 

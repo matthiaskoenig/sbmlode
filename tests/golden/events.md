@@ -43,8 +43,7 @@ The initial assignments set the values at $t = 0$:
 
 $$
 \begin{aligned}
-S &= S_{0} \\[1ex]
-n_{A} &= A \cdot V
+S &= S_{0}
 \end{aligned}
 $$
 
@@ -52,7 +51,6 @@ The assignment rules hold at every time $t$:
 
 $$
 \begin{aligned}
-A &= \frac{n_{A}}{V} \\[1ex]
 k_{2} &= 2 \cdot k_{1}
 \end{aligned}
 $$
@@ -82,12 +80,12 @@ $$
 \frac{\mathrm{d} V}{\mathrm{d} t} &= 0.1 \qquad \text{(rate rule)} \\[1ex]
 \frac{\mathrm{d} S}{\mathrm{d} t} &= \frac{-v_{\mathrm{J0}} - v_{\mathrm{J1}}}{c} \\[1ex]
 \frac{\mathrm{d} P}{\mathrm{d} t} &= \frac{v_{\mathrm{J0}} + 2 \cdot v_{\mathrm{J1}}}{c} \\[1ex]
-\frac{\mathrm{d} n_{A}}{\mathrm{d} t} &= -v_{\mathrm{J1}} \\[1ex]
+\frac{\mathrm{d} A}{\mathrm{d} t} &= \frac{-v_{\mathrm{J1}}}{V} - \frac{A}{V} \cdot \frac{\mathrm{d} V}{\mathrm{d} t} \\[1ex]
 \frac{\mathrm{d} B}{\mathrm{d} t} &= -0.1 \cdot B \qquad \text{(rate rule)}
 \end{aligned}
 $$
 
-The species $A$ in the compartment $V$ of variable size is integrated as its amount $n_{A}$, its concentration is $A = n_{A} / V$.
+The concentration of a species in a compartment whose size changes is diluted by the rate of the size (SBML Level 3 Version 2, section 3.4.6), the amount it holds is kept.
 
 ## Events
 
@@ -101,11 +99,14 @@ $$
 \begin{aligned}
 V &\mathrel{:=} 2 \cdot V \\[1ex]
 S &\mathrel{:=} 10 \\[1ex]
+A &\mathrel{:=} \frac{A \cdot V}{V^{\mathrm{new}}} \\[1ex]
 B &\mathrel{:=} \frac{B \cdot V}{V^{\mathrm{new}}}
 \end{aligned}
 $$
 
-$B$ is converted from the size of $V$ at the execution of the event to the size $V^{\mathrm{new}}$ the event assigns, so that its amount is kept.
+$A$ is converted from the size of $V$ before the event to its size $V^{\mathrm{new}}$ after the event, so that its amount is kept.
+
+$B$ is converted from the size of $V$ before the event to its size $V^{\mathrm{new}}$ after the event, so that its amount is kept.
 
 **Event `E2`**
 
@@ -115,9 +116,7 @@ $B$ is converted from the size of $V$ at the execution of the event to the size 
 
 $$
 \begin{aligned}
-n_{A} &\mathrel{:=} V \\[1ex]
+A &\mathrel{:=} 1 \\[1ex]
 \mathrm{total} &\mathrel{:=} \mathrm{total} + 1
 \end{aligned}
 $$
-
-$n_{A}$ is the amount of $A$, the assigned concentration times the size of $V$ at the execution of the event.

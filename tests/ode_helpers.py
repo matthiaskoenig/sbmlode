@@ -1240,8 +1240,7 @@ POINT = {"rel": 1e-8, "abs": 1e-12}
 def selection(quantity: Quantity) -> str:
     """The roadrunner selection of a quantity in the representation of the system.
 
-    An amount of a species is the amount of the species, a species in concentration
-    its concentration, everything else its id.
+    A species in concentration is its concentration, everything else its id.
 
     Args:
         quantity: the quantity of the system
@@ -1249,8 +1248,6 @@ def selection(quantity: Quantity) -> str:
     Returns:
         the selection, e.g. `[S]` for the concentration of `S`
     """
-    if quantity.amount_of is not None:
-        return quantity.amount_of
     if quantity.symbol.kind == "species" and not quantity.amount:
         return f"[{quantity.symbol.sid}]"
     return quantity.symbol.sid
@@ -1305,9 +1302,17 @@ def roadrunner_reference(
             # a local parameter, which roadrunner holds under the id of its reaction
             continue
     assigned = {}
+    rates = {rate.symbol.sid: rate.compartment for rate in system.size_rates}
     for sid in system.assigned:
         quantity = quantities.get(sid)
-        assigned[sid] = r[sid if quantity is None else selection(quantity)]
+        if sid in rates:
+            # the rate of a size, `C'`, which roadrunner has for a rate rule only
+            try:
+                assigned[sid] = r[f"{rates[sid]}'"]
+            except RuntimeError:
+                continue
+        else:
+            assigned[sid] = r[sid if quantity is None else selection(quantity)]
     return Reference(
         states={sid: r[selection(quantities[sid])] for sid in system.states},
         rates=_rates(r, system),
@@ -1325,18 +1330,41 @@ def _rates(r: Any, system: OdeSystem) -> dict[str, float]:
     """
     vector = r.getRatesOfChange()
     by_id = {r.model.getStateVectorId(k): v for k, v in enumerate(vector)}
+    assigned = {a.variable for a in system.assignments if a.origin == "assignment_rule"}
     result = {}
     for sid in system.states:
         quantity = system.quantity(sid)
         try:
             result[sid] = r[f"{selection(quantity)}'"]
         except RuntimeError:
-            rate = by_id[quantity.amount_of or sid]
             concentration = quantity.symbol.kind == "species" and not quantity.amount
-            if concentration and quantity.amount_of is None:
-                rate /= r[str(quantity.compartment)]
+            size = str(quantity.compartment)
+            size_rate = _size_rate(size, by_id, assigned) if concentration else 0.0
+            if sid not in by_id or size_rate is None:
+                # roadrunner has no rate of a concentration in a size of an
+                # assignment rule; its trajectory is compared
+                continue
+            rate = by_id[sid]
+            if concentration:
+                # the rate of the amount, d(S V)/dt = V dS/dt + S dV/dt
+                rate = (rate - r[f"[{sid}]"] * size_rate) / r[size]
             result[sid] = rate
     return result
+
+
+def _size_rate(
+    cid: str, by_id: Mapping[str, float], assigned: set[str]
+) -> float | None:
+    """The rate of change of the size of a compartment in roadrunner.
+
+    0 for a constant size, `None` for a size of an assignment rule, whose rate
+    roadrunner does not have.
+    """
+    if cid in by_id:
+        return by_id[cid]
+    if cid in assigned:
+        return None
+    return 0.0
 
 
 def assert_values(
@@ -1498,7 +1526,8 @@ def assert_table_as_roadrunner(
     The simulation integrated with the relative tolerance 1e-10 and the absolute
     tolerance 1e-12, as roadrunner does here; every column of the table (the states,
     the assigned values and the constants which events change) is compared with its
-    roadrunner selection, at every time point.
+    roadrunner selection, at every time point; the rate of a size of an assignment
+    rule, which roadrunner does not select, is not.
 
     Args:
         sbml: the SBML of the model or the path of its file
@@ -1514,10 +1543,21 @@ def assert_table_as_roadrunner(
     r.integrator.relative_tolerance = 1e-10
     r.integrator.absolute_tolerance = 1e-12
     quantities = {q.symbol.sid: q for q in system.quantities}
-    columns = list(df.columns[1:])
-    selections = [
-        selection(quantities[sid]) if sid in quantities else sid for sid in columns
-    ]
+    rates = {rate.symbol.sid: rate.compartment for rate in system.size_rates}
+    columns = []
+    selections = []
+    for sid in df.columns[1:]:
+        if sid in rates:
+            # the rate of a size, `C'` in roadrunner, which has none for a size of an
+            # assignment rule: the states it dilutes are compared
+            try:
+                r[f"{rates[sid]}'"]
+            except RuntimeError:
+                continue
+            selections.append(f"{rates[sid]}'")
+        else:
+            selections.append(selection(quantities[sid]) if sid in quantities else sid)
+        columns.append(sid)
     r.timeCourseSelections = ["time", *selections]
     result = r.simulate(0.0, t_end, points)
     np.testing.assert_allclose(df["time"], result[:, 0], rtol=1e-12)

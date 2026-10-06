@@ -84,6 +84,10 @@ The initial assignments set the values at $t = 0$:
 The assignment rules hold at every time $t$:
 
 {{ equations(assignments) -}}
+{% if assignments | selectattr("origin", "equalto", "size_rate") | list %}
+
+The rate of the size of a compartment with an assignment rule is the derivative of the rule in time, with the rates of change of the states it depends on.
+{% endif %}
 {% endif %}
 {% endif %}
 {% if reactions %}
@@ -111,10 +115,10 @@ $$
 The states change in time with {{ "the rates of the reactions and the rate rules" if rules and rules | length < odes | length else ("the rate rules" if rules else "the rates of the reactions") }}:
 
 {{ equations(odes) -}}
-{% for a in amounts %}
+{% if dilution %}
 
-The species ${{ a.species }}$ in the compartment ${{ a.compartment }}$ of variable size is integrated as its amount ${{ a.amount }}$, its concentration is ${{ a.species }} = {{ a.amount }} / {{ a.compartment }}$.
-{% endfor %}
+The concentration of a species in a compartment whose size changes is diluted by the rate of the size (SBML Level 3 Version 2, section 3.4.6), the amount it holds is kept.
+{% endif %}
 {% endif %}
 {% if events %}
 
@@ -142,11 +146,7 @@ $$
 $$
 {% for a in e.assignments if a.conversion %}
 
-{% if a.conversion == "amount" %}
-${{ a.lhs }}$ is the amount of ${{ a.species }}$, the assigned concentration times the size of ${{ a.compartment }}$ at the execution of the event.
-{% else %}
-${{ a.lhs }}$ is converted from the size of ${{ a.compartment }}$ at the execution of the event to the size ${{ a.new }}$ the event assigns, so that its amount is kept.
-{% endif %}
+${{ a.lhs }}$ is converted from the size of ${{ a.compartment }}$ before the event to its size ${{ a.new }}$ after the event, so that its amount is kept.
 {% endfor %}
 {% endif %}
 {% endfor %}

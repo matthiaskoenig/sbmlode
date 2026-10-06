@@ -307,16 +307,30 @@ function {{ e.functions["values"] }}(x, p, t)
     ]
 end
 
+{% if e.functions.sizes %}
+"""
+    {{ e.functions.sizes }}(x, p, t)
+
+The sizes of the compartments the event {{ e.id }} changes, after its assignments.
+"""
+function {{ e.functions.sizes }}(x, p, t)
+{% set lines = body(e.scopes.sizes) | trim("\n") %}
+{% if lines %}
+{{ lines }}
+{% endif %}
+    return Float64[{% for c in e.sizes %}{{ c.code }}{{ ", " if not loop.last }}{% endfor %}]
+end
+
+{% endif %}
 """
     {{ e.functions.assign }}(x, p, t, values)
 
 Execute the event {{ e.id }}: the states x and the constants p with the values, new vectors.
 {% if e.assignments | selectattr("scale") | list %}
 
-The size of a compartment which scales a value is the size before the event: a
-concentration held as its amount is assigned the amount of the new concentration, a
-concentration with a rate rule keeps its amount when the size of its compartment
-changes.
+A concentration in a compartment whose size the event changes keeps its amount: it is
+scaled with the size before the event and divided by the size after it,
+`{{ e.functions.sizes }}`, evaluated with the values the event assigned.
 {% endif %}
 """
 function {{ e.functions.assign }}(x, p, t, values)
@@ -333,8 +347,11 @@ function {{ e.functions.assign }}(x, p, t, values)
 {% elif a.scale is not none %}
 {% set value = value ~ " * " ~ a.scale %}
 {% endif %}
-{% if a.divisor_position is not none %}
-{% set value = value ~ " / values[%d]" % (a.divisor_position + 1) %}
+{% if a.divisor_index is not none %}
+{% if loop.first or loop.previtem.divisor_index is none %}
+    sizes = {{ e.functions.sizes }}(x, p, t)
+{% endif %}
+{% set value = value ~ " / sizes[%d]" % (a.divisor_index + 1) %}
 {% endif %}
     {{ "x" if a.kind == "state" else "p" }}[{{ a.index }}] = {{ value }}  # {{ a.id }}{% if a.comment %} {{ a.comment }}{% endif %}
 

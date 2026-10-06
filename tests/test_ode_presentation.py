@@ -1,7 +1,8 @@
 """Test the presentation formats of the ODE export: typst, LaTeX and markdown.
 
 The documents of the demo model, the repressilator and a model with events, function
-definitions, an amount state and initial assignments are compared with the golden
+definitions, a variable compartment and initial assignments, and a model of
+variable compartments (a rate rule, an assignment rule, an event) are compared with the golden
 files in `golden/`, which are regenerated with `SBMLODE_UPDATE_GOLDEN=1`, and are
 compiled: typst with the `typst` package, LaTeX with tectonic (skipped without it on
 the path, failed with `SBMLODE_REQUIRE_TOOLCHAINS`), markdown parsed with
@@ -22,7 +23,7 @@ from ode_helpers import (
     model_sbml,
     require_tectonic,
 )
-from resources import DEMO_SBML, REPRESSILATOR_SBML
+from resources import DEMO_SBML, REPRESSILATOR_SBML, VARIABLE_COMPARTMENT
 from test_ode_symbols import SYMBOLS
 
 import sbmlode
@@ -61,8 +62,8 @@ EVENTS = """
       E1 is "reset"
     end
 """
-"""A model with events, a function definition, a rate rule of a compartment, an
-amount state, an initial assignment and an assignment rule, the source of
+"""A model with events, a function definition, a rate rule of a compartment, a
+diluted species, an initial assignment and an assignment rule, the source of
 `golden/events.xml`."""
 
 MODELS: dict[str, Path | str] = {
@@ -71,6 +72,7 @@ MODELS: dict[str, Path | str] = {
     # the SBML which antimony writes, fixed, because the order of the event
     # assignments of antimony depends on its version
     "events": GOLDEN / "events.xml",
+    "variable_compartment": VARIABLE_COMPARTMENT,
 }
 """The models of the golden documents."""
 
@@ -377,7 +379,7 @@ def test_symbols_name_option(fmt: str) -> None:
 
 
 def test_symbols_are_unique() -> None:
-    """A rate or an amount whose symbol is taken is written with its id."""
+    """A rate whose symbol is taken is written with its id."""
     sbml = model_sbml("""
         species A = 1
         J0: A -> ; k * A
@@ -418,10 +420,12 @@ def test_events_section() -> None:
     # the assignments, with the conversions of the sizes
     assert r"V &\mathrel{:=} 2 \cdot V \\" in section
     assert r"B &\mathrel{:=} \frac{B \cdot V}{V^{\mathrm{new}}}" in section
-    # the concentration 1 converted to the amount is the size
-    assert r"n_{A} &\mathrel{:=} V \\" in section
-    assert r"$n_{A}$ is the amount of $A$" in section
-    assert r"$B$ is converted from the size of $V$" in section
+    # a concentration of the resized compartment keeps its amount
+    assert r"A &\mathrel{:=} \frac{A \cdot V}{V^{\mathrm{new}}}" in section
+    assert (
+        r"$B$ is converted from the size of $V$ before the event to its size "
+        r"$V^{\mathrm{new}}$ after the event"
+    ) in section
 
 
 def test_events_section_without_delay_and_priority() -> None:
@@ -442,15 +446,17 @@ def test_events_section_without_delay_and_priority() -> None:
     assert r"A &\mathrel{:=} 0" in section
 
 
-def test_amount_state() -> None:
-    """A species in a compartment of variable size is integrated as its amount."""
+def test_dilution() -> None:
+    """A species in a compartment of variable size is diluted by the rate of the size."""
     document = render("events", "latex")
-    assert r"\frac{\mathrm{d} n_{A}}{\mathrm{d} t} &= -v_{\mathrm{J1}}" in document
-    assert r"A &= \frac{n_{A}}{V}" in document
-    assert r"n_{A} &= A \cdot V" in document
     assert (
-        r"The species $A$ in the compartment $V$ of variable size is integrated as "
-        r"its amount $n_{A}$, its concentration is $A = n_{A} / V$."
+        r"\frac{\mathrm{d} A}{\mathrm{d} t} &= \frac{-v_{\mathrm{J1}}}{V} - "
+        r"\frac{A}{V} \cdot \frac{\mathrm{d} V}{\mathrm{d} t}"
+    ) in document
+    assert "n_{A}" not in document
+    assert (
+        "The concentration of a species in a compartment whose size changes is "
+        "diluted by the rate of the size (SBML Level 3 Version 2, section 3.4.6)"
     ) in document
 
 

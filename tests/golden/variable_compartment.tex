@@ -1,0 +1,143 @@
+\documentclass{article}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage{lmodern}
+\else
+  \usepackage{fontspec}
+\fi
+\usepackage{amsmath, amssymb, booktabs, xltabular, parskip, hyperref}
+\usepackage[margin=2cm]{geometry}
+% the equations of a section are one alignment, which breaks across pages
+\allowdisplaybreaks
+\setlength{\jot}{1.5ex}
+\renewcommand{\arraystretch}{1.15}
+
+\begin{document}
+
+{\centering\LARGE\bfseries Variable compartments\par}
+\bigskip
+
+Model \texttt{variable\_}\allowbreak{}\texttt{compartment}, SBML Level 3 Version 2, read from variable\_\allowbreak{}compartment.xml, written by sbmlode VERSION.
+
+Species in concentration in compartments whose size changes: Vc grows by a rate rule, Va follows an assignment rule of the time and of S1, the event grow doubles Ve. B is a boundary species which is diluted as Vc grows.
+
+\section{Units}
+
+\begin{tabular}{@{}llll@{}}
+  \toprule
+  \textbf{Time} & \textbf{Substance} & \textbf{Extent} & \textbf{Volume} \\
+  \midrule
+  s & mole & mole & l \\
+  \bottomrule
+\end{tabular}
+
+\section{Compartments}
+
+\begin{xltabular}{\linewidth}{@{}l l >{\raggedright\arraybackslash\hspace{0pt}}X l l c@{}}
+  \toprule
+  \textbf{Symbol} & \textbf{Id} & \textbf{Name} & \textbf{Size} & \textbf{Unit} & \textbf{Constant} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  $\mathrm{Vc}$ & \texttt{Vc} & growing cell & $1$ & l &  \\
+  $\mathrm{Va}$ & \texttt{Va} & assigned compartment &  & l &  \\
+  $\mathrm{Ve}$ & \texttt{Ve} & resized compartment & $1$ & l &  \\
+\end{xltabular}
+
+\section{Species}
+
+\begin{xltabular}{\linewidth}{@{}l l >{\raggedright\arraybackslash\hspace{0pt}}X l l l >{\raggedright\arraybackslash\hspace{0pt}}X@{}}
+  \toprule
+  \textbf{Symbol} & \textbf{Id} & \textbf{Name} & \textbf{Compartment} & \textbf{Value} & \textbf{Unit} & \textbf{Properties} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  $S_{1}$ & \texttt{S1} & substrate & $\mathrm{Vc}$ & $1$ & mole/l & concentration \\
+  $S_{2}$ & \texttt{S2} & intermediate & $\mathrm{Va}$ &  & mole/l & concentration \\
+  $S_{3}$ & \texttt{S3} & product & $\mathrm{Ve}$ & $1$ & mole/l & concentration \\
+  $B$ & \texttt{B} & buffer & $\mathrm{Vc}$ & $1$ & mole/l & concentration, boundary \\
+\end{xltabular}
+
+\section{Parameters}
+
+\begin{xltabular}{\linewidth}{@{}l l >{\raggedright\arraybackslash\hspace{0pt}}X l l c@{}}
+  \toprule
+  \textbf{Symbol} & \textbf{Id} & \textbf{Name} & \textbf{Value} & \textbf{Unit} & \textbf{Constant} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  $k_{\mathrm{g}}$ & \texttt{k\_g} & growth rate & $0.1$ & 1/s & $\checkmark$ \\
+  $k_{\mathrm{a}}$ & \texttt{k\_a} & expansion rate & $0.2$ & 1/s & $\checkmark$ \\
+  $\mathrm{Va}_{0}$ & \texttt{Va0} & initial size of Va & $1$ & l &  \\
+  $c_{\mathrm{a}}$ & \texttt{c\_a} & swelling by the substrate & $0.1$ & l\textsuperscript{2}/mol & $\checkmark$ \\
+  $k_{1}$ & \texttt{k1} &  & $1$ & 1/s & $\checkmark$ \\
+  $k_{2}$ & \texttt{k2} &  & $0.5$ & 1/s & $\checkmark$ \\
+\end{xltabular}
+
+\section{Initial assignments and assignment rules}
+
+The initial assignments set the values at $t = 0$:
+\begin{align*}
+  S_{2} &= \frac{1}{\mathrm{Va}}
+\end{align*}
+
+The assignment rules hold at every time $t$:
+\begin{align*}
+  \mathrm{Va} &= \mathrm{Va}_{0} \cdot \mathopen{}\left(1 + k_{\mathrm{a}} \cdot t\right) + c_{\mathrm{a}} \cdot S_{1} \\
+  \frac{\mathrm{d} \,\mathrm{Va}}{\mathrm{d} t} &= \mathrm{Va}_{0} \cdot k_{\mathrm{a}} + c_{\mathrm{a}} \cdot \mathopen{}\left(\frac{-v_{\mathrm{J1}}}{\mathrm{Vc}} - \frac{S_{1}}{\mathrm{Vc}} \cdot \frac{\mathrm{d} \,\mathrm{Vc}}{\mathrm{d} t}\right)
+\end{align*}
+
+The rate of the size of a compartment with an assignment rule is the derivative of the rule in time, with the rates of change of the states it depends on.
+
+\section{Reactions}
+
+\begin{xltabular}{\linewidth}{@{}l l >{\raggedright\arraybackslash\hspace{0pt}}X >{\raggedright\arraybackslash\hspace{0pt}}X@{}}
+  \toprule
+  \textbf{Rate} & \textbf{Id} & \textbf{Name} & \textbf{Equation} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  $v_{\mathrm{J1}}$ & \texttt{J1} & transport & $S_{1} \longrightarrow S_{2}$ \\
+  $v_{\mathrm{J2}}$ & \texttt{J2} & conversion & $S_{2} \longrightarrow S_{3}$ \\
+\end{xltabular}
+
+The rates of the reactions are:
+\begin{align*}
+  v_{\mathrm{J1}} &= k_{1} \cdot S_{1} \cdot \mathrm{Vc} \\
+  v_{\mathrm{J2}} &= k_{2} \cdot S_{2} \cdot \mathrm{Va}
+\end{align*}
+
+\section{ODE system}
+
+The states change in time with the rates of the reactions and the rate rules:
+\begin{align*}
+  \frac{\mathrm{d} \,\mathrm{Vc}}{\mathrm{d} t} &= k_{\mathrm{g}} \cdot \mathrm{Vc} \qquad \text{(rate rule)} \\
+  \frac{\mathrm{d} S_{1}}{\mathrm{d} t} &= \frac{-v_{\mathrm{J1}}}{\mathrm{Vc}} - \frac{S_{1}}{\mathrm{Vc}} \cdot \frac{\mathrm{d} \,\mathrm{Vc}}{\mathrm{d} t} \\
+  \frac{\mathrm{d} S_{2}}{\mathrm{d} t} &= \frac{v_{\mathrm{J1}} - v_{\mathrm{J2}}}{\mathrm{Va}} - \frac{S_{2}}{\mathrm{Va}} \cdot \frac{\mathrm{d} \,\mathrm{Va}}{\mathrm{d} t} \\
+  \frac{\mathrm{d} S_{3}}{\mathrm{d} t} &= \frac{v_{\mathrm{J2}}}{\mathrm{Ve}} \\
+  \frac{\mathrm{d} B}{\mathrm{d} t} &= -\frac{B}{\mathrm{Vc}} \cdot \frac{\mathrm{d} \,\mathrm{Vc}}{\mathrm{d} t}
+\end{align*}
+
+The concentration of a species in a compartment whose size changes is diluted by the rate of the size (SBML Level 3 Version 2, section 3.4.6), the amount it holds is kept.
+
+\section{Events}
+
+\textbf{Event \texttt{grow}}
+
+\begin{itemize}
+  \item Trigger: $t > 2$
+  \item \texttt{initialValue} true, \texttt{persistent} true, \texttt{useValuesFromTriggerTime} true
+\end{itemize}
+\begin{align*}
+  \mathrm{Ve} &\mathrel{:=} 2 \\
+  S_{3} &\mathrel{:=} \frac{S_{3} \cdot \mathrm{Ve}}{\mathrm{Ve}^{\mathrm{new}}}
+\end{align*}
+
+$S_{3}$ is converted from the size of $\mathrm{Ve}$ before the event to its size $\mathrm{Ve}^{\mathrm{new}}$ after the event, so that its amount is kept.
+
+\end{document}

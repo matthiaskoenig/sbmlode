@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="variable_compartment" name="Variable compartments" substanceUnits="mole" timeUnits="second" volumeUnits="litre" extentUnits="mole">
+    <notes>
+      <body xmlns="http://www.w3.org/1999/xhtml">
+        <p>Species in concentration in compartments whose size changes: Vc grows by a rate rule, Va follows an assignment rule of the time and of S1, the event grow doubles Ve. B is a boundary species which is diluted as Vc grows.</p>
+      </body>
+    </notes>
+    <listOfUnitDefinitions>
+      <unitDefinition id="per_second">
+        <listOfUnits>
+          <unit kind="second" exponent="-1" scale="0" multiplier="1"/>
+        </listOfUnits>
+      </unitDefinition>
+      <unitDefinition id="litre_per_concentration">
+        <listOfUnits>
+          <unit kind="litre" exponent="2" scale="0" multiplier="1"/>
+          <unit kind="mole" exponent="-1" scale="0" multiplier="1"/>
+        </listOfUnits>
+      </unitDefinition>
+    </listOfUnitDefinitions>
+    <listOfCompartments>
+      <compartment id="Vc" name="growing cell" spatialDimensions="3" size="1" units="litre" constant="false"/>
+      <compartment id="Va" name="assigned compartment" spatialDimensions="3" units="litre" constant="false"/>
+      <compartment id="Ve" name="resized compartment" spatialDimensions="3" size="1" units="litre" constant="false"/>
+    </listOfCompartments>
+    <listOfSpecies>
+      <species id="S1" name="substrate" compartment="Vc" initialConcentration="1" substanceUnits="mole" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="S2" name="intermediate" compartment="Va" initialAmount="1" substanceUnits="mole" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="S3" name="product" compartment="Ve" initialConcentration="1" substanceUnits="mole" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" name="buffer" compartment="Vc" initialConcentration="1" substanceUnits="mole" hasOnlySubstanceUnits="false" boundaryCondition="true" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters>
+      <parameter id="k_g" name="growth rate" value="0.1" units="per_second" constant="true"/>
+      <parameter id="k_a" name="expansion rate" value="0.2" units="per_second" constant="true"/>
+      <parameter id="Va0" name="initial size of Va" value="1" units="litre" constant="false"/>
+      <parameter id="c_a" name="swelling by the substrate" value="0.1" units="litre_per_concentration" constant="true"/>
+      <parameter id="k1" value="1" units="per_second" constant="true"/>
+      <parameter id="k2" value="0.5" units="per_second" constant="true"/>
+    </listOfParameters>
+    <listOfRules>
+      <rateRule variable="Vc">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><times/><ci> k_g </ci><ci> Vc </ci></apply>
+        </math>
+      </rateRule>
+      <assignmentRule variable="Va">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply>
+            <plus/>
+            <apply>
+              <times/>
+              <ci> Va0 </ci>
+              <apply>
+                <plus/>
+                <cn type="integer" xmlns:sbml="http://www.sbml.org/sbml/level3/version2/core" sbml:units="dimensionless"> 1 </cn>
+                <apply><times/><ci> k_a </ci><csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol></apply>
+              </apply>
+            </apply>
+            <apply><times/><ci> c_a </ci><ci> S1 </ci></apply>
+          </apply>
+        </math>
+      </assignmentRule>
+    </listOfRules>
+    <listOfReactions>
+      <reaction id="J1" name="transport" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S1" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="S2" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k1 </ci><ci> S1 </ci><ci> Vc </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+      <reaction id="J2" name="conversion" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S2" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="S3" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k2 </ci><ci> S2 </ci><ci> Va </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>
+    <listOfEvents>
+      <event id="grow" useValuesFromTriggerTime="true">
+        <trigger initialValue="true" persistent="true">
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><gt/><csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time"> time </csymbol><cn type="integer" xmlns:sbml="http://www.sbml.org/sbml/level3/version2/core" sbml:units="second"> 2 </cn></apply>
+          </math>
+        </trigger>
+        <listOfEventAssignments>
+          <eventAssignment variable="Ve">
+            <math xmlns="http://www.w3.org/1998/Math/MathML"><cn type="integer" xmlns:sbml="http://www.sbml.org/sbml/level3/version2/core" sbml:units="litre"> 2 </cn></math>
+          </eventAssignment>
+        </listOfEventAssignments>
+      </event>
+    </listOfEvents>
+  </model>
+</sbml>

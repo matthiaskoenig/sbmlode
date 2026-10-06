@@ -1,4 +1,8 @@
-"""The models of the tests, copied from the resources of sbmlutils."""
+"""The models of the tests, copied from the resources of sbmlutils.
+
+`variable_compartment.xml` is written for the native quantities: compartments of a
+rate rule, an assignment rule and an event, see `docs/design`.
+"""
 
 from pathlib import Path
 
@@ -13,3 +17,6 @@ GALACTOSE_SINGLECELL_SBML: Path = MODELS_DIR / "galactose" / "galactose_30.xml"
 VDP_SBML: Path = MODELS_DIR / "van_der_pol" / "van_der_pol.xml"
 COMP_DEX_LIVER: Path = MODELS_DIR / "comp" / "dex_liver.xml"
 COMP_SPT_LIVER: Path = MODELS_DIR / "comp" / "spt_liver.xml"
+VARIABLE_COMPARTMENT: Path = (
+    MODELS_DIR / "variable_compartment" / "variable_compartment.xml"
+)

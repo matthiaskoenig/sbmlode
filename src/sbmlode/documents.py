@@ -19,9 +19,8 @@ math of these as markup of its format, so that a template only lays them out:
 - math is printed with the printer of the format, `LatexPrinter` for LaTeX and
   markdown (in `$$ ... $$`), `TypstPrinter` for typst, the ids written as the math
   symbols of `symbols.typeset_names` (`symbols="id"` or `"name"`): the rate of a
-  reaction is `v` with the id as subscript, `v_{\mathrm{J0}}`, the amount of a
-  species held as amount is `n` with the symbol of the species as subscript,
-  `n_{S}`;
+  reaction is `v` with the id as subscript, `v_{\mathrm{J0}}`, the rate of the size
+  of a compartment is the derivative of its symbol, `dV/dt`;
 - a long sum is a list of lines (`DocumentPrinter.print_lines`), which a template
   joins into the lines of an alignment; a line after the first begins with its sign.
 
@@ -42,22 +41,23 @@ The context holds:
 - `functions`: `lhs` (`f(x, y)`) and `rhs`;
 - `initial`: the initial assignments and the initial values which are a conversion
   between amount and concentration, `assignments`: the assignment rules and the
-  concentrations of the species held as amount, each with `lhs`, `lines` and
-  `origin`;
-- `amounts`: the species held as amount, with `amount`, `species` and
-  `compartment` as math;
+  rates of the sizes of the compartments with an assignment rule (origin
+  `size_rate`, the rate of a size with a rate rule is its ODE), each with `lhs`,
+  `lines` and `origin`;
 - `reactions`: `symbol` (`v_{J0}`), `id`, `long_id`, `name`, `equation` (math,
   `2 A + B ⟶ C`, `⇌` if reversible, `∅` for no species), `modifiers` and
   `local_parameters` (math, comma separated), `lines` of the rate;
 - `odes`: `lhs` (`dS/dt`), `lines` and `origin`, the right hand side written with
   the rates of the reactions and divided by the volume of a species in
-  concentration (`(v_1 - v_2)/V`, in lines `1/V (v_1 - v_2 ...)`), or the rate
-  rule;
+  concentration (`(v_1 - v_2)/V`, in lines `1/V (v_1 - v_2 ...)`) and diluted by
+  the rate of the size of its compartment (`- S/V dV/dt`, a line of its own), or the
+  rate rule; `origin` is `reactions`, `rate_rule` or `dilution`, a species diluted
+  alone; `dilution` whether an ODE has the term of a dilution;
 - `events`: `id`, `name`, `trigger`, `delay`, `priority` (math, `None` without),
   `initial_value`, `persistent`, `use_trigger_values` and `assignments` with `lhs`
   and `rhs`, the effective value with the conversion of a size, `conversion`
-  (`None`, `amount` for the amount of a `species` in concentration, `resized` for a
-  concentration whose `compartment` the event resizes to `new`, `V^{new}`);
+  (`None`, or `resized` for a concentration whose `compartment` the event resizes
+  to `new`, `V^{new}`, its size after the event);
 - `unsupported`: `construct` and `id`;
 - `options`: the options of the rendering.
 
@@ -74,7 +74,7 @@ from typing import TYPE_CHECKING, Literal
 import libsbml
 
 import sbmlode
-from sbmlode.astutil import is_number, name, node, product
+from sbmlode.astutil import is_number, name, node, product, signed_sum
 from sbmlode.printers import (
     DocumentPrinter,
     LatexPrinter,
@@ -105,7 +105,6 @@ __all__ = [
     "DIALECTS",
     "Dialect",
     "DocumentContext",
-    "TypesetAmount",
     "TypesetEquation",
     "TypesetEvent",
     "TypesetEventAssignment",
@@ -360,15 +359,6 @@ class TypesetEquation:
 
 
 @dataclass(frozen=True)
-class TypesetAmount:
-    """A species held as amount: its amount, the species and its compartment."""
-
-    amount: str
-    species: str
-    compartment: str
-
-
-@dataclass(frozen=True)
 class TypesetReaction:
     """A reaction: its equation and its rate.
 
@@ -403,18 +393,16 @@ class TypesetEventAssignment:
         variable: the symbol of the variable
         lhs: the variable as math
         rhs: the effective value as math
-        conversion: `None`, `amount` for the amount of a species in concentration,
-            `resized` for a concentration whose compartment the event resizes
-        species: the species of an amount as math
+        conversion: `None`, or `resized` for a concentration whose compartment the
+            event resizes
         compartment: the compartment of the conversion as math
-        new: the new size of the compartment as math, `V^{new}`
+        new: the size of the compartment after the event as math, `V^{new}`
     """
 
     variable: Symbol
     lhs: str
     rhs: str
     conversion: str | None
-    species: str | None
     compartment: str | None
     new: str | None
 
@@ -466,9 +454,9 @@ class TypesetSystem:
     functions: tuple[TypesetFunction, ...]
     initial: tuple[TypesetEquation, ...]
     assignments: tuple[TypesetEquation, ...]
-    amounts: tuple[TypesetAmount, ...]
     reactions: tuple[TypesetReaction, ...]
     odes: tuple[TypesetEquation, ...]
+    dilution: bool
     events: tuple[TypesetEvent, ...]
     unsupported: tuple[TypesetUnsupported, ...]
 
@@ -513,15 +501,19 @@ class DocumentContext:
         self.ruled = {
             a.variable for a in system.assignments if a.origin == "assignment_rule"
         }
+        # the rates of the sizes with a rate rule, which are the ODEs of the sizes
+        self.state_rates = {
+            r.symbol.sid for r in system.size_rates if r.compartment in system.states
+        }
 
     # --- symbols ------------------------------------------------------------------
 
     def _symbols(self, by_name: bool) -> dict[str, str]:
         """The math symbol of every id of the system.
 
-        A reaction is `v` with its id (or name) as subscript, an amount `n` with the
-        symbol of its species as subscript, unless the symbol is taken, then it is
-        the symbol of its id.
+        A reaction is `v` with its id (or name) as subscript, unless the symbol is
+        taken, then it is the symbol of its id; the rate of a size is the derivative
+        of the symbol of its compartment, `dV/dt`.
         """
         system = self.system
         dialect = self.dialect.symbols
@@ -544,17 +536,31 @@ class DocumentContext:
             if not re.fullmatch(r"[A-Za-z0-9_]+", label):
                 label = sid
             preferred[sid] = typeset_symbol(f"v_{label}", dialect)
-        for amount in system.amounts:
-            species = symbols[str(amount.amount_of)]
-            preferred[amount.symbol.sid] = (
-                f"n_{{{species}}}" if dialect == "latex" else f"n_({species})"
-            )
         for sid, symbol in preferred.items():
             if symbol not in taken:
                 taken.discard(symbols[sid])
                 symbols[sid] = symbol
                 taken.add(symbol)
+        for rate in system.size_rates:
+            compartment = symbols[rate.compartment]
+            symbols[rate.symbol.sid] = self._derivative(compartment, compartment)
         return symbols
+
+    def _derivative(self, plain: str, symbol: str) -> str:
+        """The derivative of a symbol in time, `dS/dt`.
+
+        A symbol of upright letters is set apart from the upright d, `d PX`; typst
+        spaces a string of letters without a subscript as a word itself.
+
+        Args:
+            plain: the symbol as it is typeset, which decides the space
+            symbol: the symbol as it is written, e.g. wrapped into a link
+        """
+        if plain.startswith(r"\mathrm"):
+            symbol = rf"\,{symbol}"
+        elif plain.startswith("upright(") and ")_(" in plain:
+            symbol = f"thin {symbol}"
+        return self.dialect.derivative.replace("{symbol}", symbol)
 
     # --- printing -----------------------------------------------------------------
 
@@ -687,18 +693,12 @@ class DocumentContext:
             assignments=tuple(
                 self.equation(a.variable, self.lines(a.math), a.origin)
                 for a in system.assignments
-                if a.origin in ("assignment_rule", "concentration")
-            ),
-            amounts=tuple(
-                TypesetAmount(
-                    amount=self.symbols[q.symbol.sid],
-                    species=self.symbols[str(q.amount_of)],
-                    compartment=self.symbols[str(q.compartment)],
-                )
-                for q in system.amounts
+                if a.origin == "assignment_rule"
+                or (a.origin == "size_rate" and a.variable not in self.state_rates)
             ),
             reactions=tuple(self.reaction(k) for k in range(len(system.reactions))),
             odes=tuple(self.ode(ode) for ode in system.odes),
+            dilution=any(ode.size_rate is not None for ode in system.odes),
             events=tuple(self.event(k) for k in range(len(system.events))),
             unsupported=tuple(
                 TypesetUnsupported(self.dialect.text(construct), self.label(sid), sid)
@@ -811,9 +811,17 @@ class DocumentContext:
         """The ODE of a state, with the rates of the reactions.
 
         The reaction terms of a species in concentration are divided by its volume,
-        `(v_1 - v_2)/V`, or in lines `1/V (v_1 - v_2 ...)`.
+        `(v_1 - v_2)/V`, or in lines `1/V (v_1 - v_2 ...)`, and the dilution by the
+        rate of the size follows, `- S/V dV/dt`, in a line of its own after lines.
         """
-        if ode.origin == "rate_rule" or ode.reaction_terms is None:
+        dilution = None
+        if ode.size_rate is not None and ode.volume is not None:
+            dilution = node(
+                libsbml.AST_TIMES,
+                node(libsbml.AST_DIVIDE, name(ode.variable), name(ode.volume)),
+                name(ode.size_rate),
+            )
+        if ode.origin != "reactions" or ode.reaction_terms is None:
             lines = self.lines(ode.rhs)
         elif ode.volume is None:
             lines = self.lines(ode.reaction_terms)
@@ -824,6 +832,8 @@ class DocumentContext:
                 ast = node(
                     libsbml.AST_DIVIDE, ode.reaction_terms.deepCopy(), name(ode.volume)
                 )
+                if dilution is not None:
+                    ast = signed_sum([(1, ast), (-1, dilution)])
                 lines = [self.printer.print(ast, self.symbols)]
             else:
                 one = Printed(self.printer.integer(1), Precedence.ATOM)
@@ -831,17 +841,11 @@ class DocumentContext:
                 left, right = self.dialect.brackets
                 lines[0] = f"{factor} {left} {lines[0]}"
                 lines[-1] = f"{lines[-1]} {right}"
-        symbol = self.symbols[ode.variable]
-        plain = self.plain[ode.variable]
-        # a symbol of upright letters is set apart from the upright d, d PX; typst
-        # spaces a string of letters without a subscript as a word itself
-        if plain.startswith(r"\mathrm"):
-            symbol = rf"\,{symbol}"
-        elif plain.startswith("upright(") and ")_(" in plain:
-            symbol = f"thin {symbol}"
+                if dilution is not None:
+                    lines.append(f"- {self.printer.print(dilution, self.symbols)}")
         return TypesetEquation(
             variable=self.system.symbol(ode.variable),
-            lhs=self.dialect.derivative.replace("{symbol}", symbol),
+            lhs=self._derivative(self.plain[ode.variable], self.symbols[ode.variable]),
             lines=tuple(lines),
             origin=ode.origin,
         )
@@ -866,13 +870,12 @@ class DocumentContext:
     def event_assignment(self, assignment: EventAssignment) -> TypesetEventAssignment:
         """An event assignment with its effective value, `value · scale / new(divisor)`.
 
-        The conversion of a size is `amount`, the value of an amount is a
-        concentration times the size of its compartment, or `resized`, a
-        concentration is converted to the new size of its compartment, see
-        `system.EventAssignment`.
+        The conversion of a size is `resized`, a concentration is converted from
+        the size of its compartment before the event to its size after the event,
+        see `system.EventAssignment`.
         """
         factors = []
-        # a concentration of 1 converted to an amount is the size, `n_A := V`
+        # a concentration of 1 converted is the quotient of the sizes, `S := V/V^new`
         if assignment.math is not None and not (
             assignment.scale is not None and is_number(assignment.math, 1.0)
         ):
@@ -884,24 +887,17 @@ class DocumentContext:
         conversion = None
         compartment = None
         new = None
-        quantity = self.system.quantity(assignment.variable)
         if assignment.divisor is not None:
             conversion = "resized"
             compartment = self.symbols[assignment.divisor]
             new = self.dialect.new.replace("{symbol}", compartment)
             symbols[_NEW + assignment.divisor] = new
             value = node(libsbml.AST_DIVIDE, value, name(_NEW + assignment.divisor))
-        elif assignment.scale is not None and quantity.amount_of is not None:
-            conversion = "amount"
-            compartment = self.symbols[str(quantity.compartment)]
         return TypesetEventAssignment(
             variable=self.system.symbol(assignment.variable),
             lhs=self.symbols[assignment.variable],
             rhs=self.printer.print(value, symbols),
             conversion=conversion,
-            species=None
-            if quantity.amount_of is None
-            else self.symbols[quantity.amount_of],
             compartment=compartment,
             new=new,
         )
