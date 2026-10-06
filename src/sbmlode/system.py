@@ -66,13 +66,16 @@ math compare by identity (`eq=False`), a libsbml math has no value equality.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import libsbml
+
+if TYPE_CHECKING:
+    from sbmlode.documents import TypesetSystem
 
 __all__ = [
     "Assignment",
@@ -110,13 +113,37 @@ Origin = Literal[
 
 @dataclass(frozen=True)
 class Symbol:
-    """An element with an id: its name, unit, SBO term and kind."""
+    """An element with an id: its name, unit, SBO term and kind.
+
+    Attributes:
+        sid: the id in the system, which the analysis makes up or changes for a
+            renamed local parameter (`<reaction>_<id>`) and the amount of a species
+            (`n_<species>`)
+        name: the name
+        unit: the unit
+        sbo: the SBO term
+        kind: the kind of the element
+        element: the element of the model the symbol stands for, if it is not the
+            element of `sid`: `(reaction, id)` for a local parameter, `(species,)` for
+            the amount of a species; empty otherwise, see `source`
+    """
 
     sid: str
     name: str | None
     unit: str | None
     sbo: str | None
     kind: Kind
+    element: tuple[str, ...] = ()
+
+    @property
+    def source(self) -> tuple[str, ...]:
+        """The element of the model the symbol stands for.
+
+        `(sid,)` for an element of the model, `(reaction, id)` for a local parameter
+        of a reaction, `(species,)` for the amount of a species; an application which
+        links a symbol to its element resolves this, e.g. SBML4Humans.
+        """
+        return self.element or (self.sid,)
 
 
 @dataclass(frozen=True)
@@ -319,6 +346,44 @@ class OdeSystem:
         from sbmlode import formats
 
         return formats.render(self, fmt, **options)
+
+    def typeset(
+        self,
+        dialect: Literal["latex", "typst"] = "latex",
+        symbols: Literal["id", "name"] = "id",
+        wrap: Callable[[Symbol, str], str] | None = None,
+    ) -> TypesetSystem:
+        """The system typeset for an application, as typed data instead of a document.
+
+        The sections are those of the documents (`latex`, `typst`, `markdown`), which
+        are rendered from the same data: the ODEs, the reaction rates, the
+        assignments, the function definitions, the initial values, the events and
+        the unsupported constructs, every text escaped and every math typeset in
+        the dialect.
+
+        Args:
+            dialect: the dialect of the math and the text, `latex` (the math of
+                KaTeX and MathJax as well) or `typst`
+            symbols: `"id"` or `"name"`, what the math symbols are made of
+            wrap: the function every math symbol is transformed with, from its
+                `Symbol` and its typeset symbol, e.g. into a link to the element
+                `Symbol.source` names; called for the symbols the documents make up
+                as well, the rate `v` of a reaction and the amount `n` of a species
+
+        Returns:
+            the typeset system
+
+        Raises:
+            ValueError: for a dialect which is neither `latex` nor `typst` or
+                symbols which are neither `id` nor `name`
+        """
+        if dialect not in ("latex", "typst"):
+            raise ValueError(
+                f"The dialect of typeset is 'latex' or 'typst', not {dialect!r}."
+            )
+        from sbmlode.documents import DocumentContext
+
+        return DocumentContext(self, dialect, symbols, wrap).typeset()
 
     def write(
         self, path: Path | str, fmt: str | None = None, **options: object

@@ -18,7 +18,7 @@ The typed data `OdeSystem.typeset` returns.
 
 ::: sbmlode.documents
     options:
-      members: ["TypesetSystem", "TypesetEquation", "TypesetEvent", "TypesetUnsupported", "TypesetModel", "TypesetUnit", "TypesetRow", "TypesetSpeciesRow", "TypesetAmount", "TypesetFunction", "TypesetReaction", "TypesetEventAssignment"]
+      members: ["TypesetSystem", "TypesetEquation", "TypesetReaction", "TypesetFunction", "TypesetEvent", "TypesetEventAssignment", "TypesetUnsupported", "TypesetModel", "TypesetUnit", "TypesetRow", "TypesetSpeciesRow", "TypesetAmount", "Wrap"]
 
 ## Reading and units
 

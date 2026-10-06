@@ -298,7 +298,7 @@ The fragment of `standalone=False` is the body of the document, whose title is a
 
 ### Markdown
 
-The markdown is GitHub flavored markdown, with tables and the math as LaTeX in `$...$` and `$$...$$`, which GitHub renders, as does this documentation with MathJax (`pymdownx.arithmatex`). It is the markdown which `create_model(..., create_markdown=True)` writes next to the SBML file, see [Model creation](creation.md).
+The markdown is GitHub flavored markdown, with tables and the math as LaTeX in `$...$` and `$$...$$`, which GitHub renders, as does this documentation with MathJax (`pymdownx.arithmatex`). It is the markdown which `create_model(..., create_markdown=True)` writes next to the SBML file, see [Model creation](https://matthiaskoenig.github.io/sbmlutils/creation/) of sbmlutils.
 
 ??? example "`repressilator.md`, the markdown source of the repressilator"
 
@@ -345,7 +345,7 @@ dY/dt = -Reaction2 + Reaction11
 dZ/dt = -Reaction3 + Reaction12
 ```
 
-The template can include the templates of the formats (`sbmlode/templates`), and has the filters of their languages: `single_line`, `python_string`, `docstring`, `julia_text`, `julia_string`, `r_text` and `r_string`. The context holds plain strings, numbers, lists and dictionaries, never libsbml objects. The context of a code format (`python`, `julia`, `r`) holds:
+The template can include the templates of the formats (`sbmlode/templates`), and has the filters of their languages: `single_line`, `python_string`, `docstring`, `julia_text`, `julia_string`, `r_text` and `r_string`. The context holds plain strings, numbers, lists, dictionaries and frozen dataclasses, never libsbml objects. The context of a code format (`python`, `julia`, `r`) holds:
 
 | key | content |
 | --- | --- |
@@ -358,7 +358,7 @@ The template can include the templates of the formats (`sbmlode/templates`), and
 | `scopes` | for every function of the code the states, constants and assignments it uses |
 | `options` | the options of the rendering |
 
-The context of a document (`typst`, `latex`, `markdown`) holds `model`, `units`, `compartments`, `species`, `parameters`, `functions`, `initial`, `assignments`, `reactions`, `odes`, `events`, `unsupported` and `options`, every text escaped and every math typeset for its markup. The keys are described in full in the docstrings of `sbmlode.formats` and `sbmlode.documents`.
+The context of a document (`typst`, `latex`, `markdown`) holds the sections of the [typed target](typeset.md), `model`, `units`, `compartments`, `species`, `parameters`, `functions`, `initial`, `assignments`, `amounts`, `reactions`, `odes`, `events` and `unsupported`, as the dataclasses of `sbmlode.documents`, and `options`, every text escaped and every math typeset for its markup. A template reads a field as `row.symbol`. The sections are described in full in the docstrings of `sbmlode.documents`, the context of the code in those of `sbmlode.formats`.
 
 ## Migration from sbmlutils
 

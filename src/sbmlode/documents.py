@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Literal
 
 import libsbml
@@ -98,9 +98,27 @@ if TYPE_CHECKING:
         OdeSystem,
         Participant,
         Quantity,
+        Symbol,
     )
 
-__all__ = ["DIALECTS", "Dialect", "DocumentContext"]
+__all__ = [
+    "DIALECTS",
+    "Dialect",
+    "DocumentContext",
+    "TypesetAmount",
+    "TypesetEquation",
+    "TypesetEvent",
+    "TypesetEventAssignment",
+    "TypesetFunction",
+    "TypesetModel",
+    "TypesetReaction",
+    "TypesetRow",
+    "TypesetSpeciesRow",
+    "TypesetSystem",
+    "TypesetUnit",
+    "TypesetUnsupported",
+    "Wrap",
+]
 
 
 @dataclass(frozen=True)
@@ -255,16 +273,225 @@ _EXPONENT = re.compile(r"\^(-?[0-9.]+)")
 _NEW = "new value of "
 
 
+# --- the typeset system -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TypesetModel:
+    """The model of a document: title, metadata and notes."""
+
+    title: str
+    plain_title: str
+    id: str | None
+    level: int
+    version: int
+    source: str | None
+    sbmlode: str
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TypesetUnit:
+    """A unit of the model, e.g. the unit of time."""
+
+    kind: str
+    unit: str | None
+
+
+@dataclass(frozen=True)
+class TypesetRow:
+    """A compartment or a parameter in its table.
+
+    Attributes:
+        symbol: the math symbol
+        id: the id as code
+        long_id: whether the id is longer than `LONG_ID`
+        name: the name as text
+        value: the value as math, `None` for a value given by a rule or a conversion
+        unit: the unit as text
+        constant: the constant flag of SBML
+    """
+
+    symbol: str
+    id: str
+    long_id: bool
+    name: str | None
+    value: str | None
+    unit: str | None
+    constant: bool
+
+
+@dataclass(frozen=True)
+class TypesetSpeciesRow(TypesetRow):
+    """A species in its table: a row with its compartment and its properties."""
+
+    compartment: str | None = None
+    properties: str = ""
+
+
+@dataclass(frozen=True)
+class TypesetFunction:
+    """A function definition, `f(x, y) = ...`."""
+
+    variable: Symbol
+    id: str
+    name: str | None
+    lhs: str
+    rhs: str
+
+
+@dataclass(frozen=True)
+class TypesetEquation:
+    """An equation of the system: an ODE, an assignment or an initial value.
+
+    Attributes:
+        variable: the symbol of the left hand side, `None` if it is no element
+        lhs: the left hand side as math, `dS/dt` of an ODE
+        lines: the right hand side as math, in lines of at most four terms; a line
+            after the first begins with its sign
+        origin: where the equation comes from, `reactions` or `rate_rule` for an
+            ODE, the `Origin` of an assignment
+    """
+
+    variable: Symbol | None
+    lhs: str
+    lines: tuple[str, ...]
+    origin: str
+
+
+@dataclass(frozen=True)
+class TypesetAmount:
+    """A species held as amount: its amount, the species and its compartment."""
+
+    amount: str
+    species: str
+    compartment: str
+
+
+@dataclass(frozen=True)
+class TypesetReaction:
+    """A reaction: its equation and its rate.
+
+    Attributes:
+        variable: the symbol of the reaction
+        symbol: the math symbol of its rate, `v` with the id as subscript
+        id: the id as code
+        long_id: whether the id is longer than `LONG_ID`
+        name: the name as text
+        equation: the reaction equation as math, `2 A + B -> C`
+        modifiers: the modifiers as math, comma separated
+        local_parameters: the local parameters as math, comma separated
+        lines: the rate as math in lines
+    """
+
+    variable: Symbol
+    symbol: str
+    id: str
+    long_id: bool
+    name: str | None
+    equation: str
+    modifiers: str | None
+    local_parameters: str | None
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TypesetEventAssignment:
+    """An event assignment with its effective value, see `DocumentContext`.
+
+    Attributes:
+        variable: the symbol of the variable
+        lhs: the variable as math
+        rhs: the effective value as math
+        conversion: `None`, `amount` for the amount of a species in concentration,
+            `resized` for a concentration whose compartment the event resizes
+        species: the species of an amount as math
+        compartment: the compartment of the conversion as math
+        new: the new size of the compartment as math, `V^{new}`
+    """
+
+    variable: Symbol
+    lhs: str
+    rhs: str
+    conversion: str | None
+    species: str | None
+    compartment: str | None
+    new: str | None
+
+
+@dataclass(frozen=True)
+class TypesetEvent:
+    """An event: its trigger, delay, priority, flags and assignments."""
+
+    symbol: Symbol
+    id: str
+    name: str | None
+    trigger: str
+    delay: str | None
+    priority: str | None
+    initial_value: bool
+    persistent: bool
+    use_trigger_values: bool
+    assignments: tuple[TypesetEventAssignment, ...]
+
+
+@dataclass(frozen=True)
+class TypesetUnsupported:
+    """A construct the system does not support, with its element.
+
+    Attributes:
+        construct: the construct as text, e.g. `algebraic rule`
+        id: the label of the element as code
+        element: the id of the element, or its metaid for an element without an id
+    """
+
+    construct: str
+    id: str
+    element: str
+
+
+@dataclass(frozen=True)
+class TypesetSystem:
+    """The system typeset for a dialect, the sections of a document.
+
+    Every text is escaped and every math typeset for the dialect; the math symbols
+    are those `wrap` of `OdeSystem.typeset` returns.
+    """
+
+    model: TypesetModel
+    units: tuple[TypesetUnit, ...]
+    compartments: tuple[TypesetRow, ...]
+    species: tuple[TypesetSpeciesRow, ...]
+    parameters: tuple[TypesetRow, ...]
+    functions: tuple[TypesetFunction, ...]
+    initial: tuple[TypesetEquation, ...]
+    assignments: tuple[TypesetEquation, ...]
+    amounts: tuple[TypesetAmount, ...]
+    reactions: tuple[TypesetReaction, ...]
+    odes: tuple[TypesetEquation, ...]
+    events: tuple[TypesetEvent, ...]
+    unsupported: tuple[TypesetUnsupported, ...]
+
+
+#: the function `OdeSystem.typeset` transforms a typeset symbol with, e.g. into a link
+Wrap = Callable[["Symbol", str], str]
+
+
 class DocumentContext:
     """The context of a document format, see the module."""
 
-    def __init__(self, system: OdeSystem, fmt: str, symbols: str) -> None:
+    def __init__(
+        self, system: OdeSystem, fmt: str, symbols: str, wrap: Wrap | None = None
+    ) -> None:
         """Prepare the context of a system.
 
         Args:
             system: the ODE system
             fmt: the name of the format, a key of `DIALECTS`
             symbols: `"id"` or `"name"`, what the math symbols are made of
+            wrap: the function every math symbol is transformed with, from the
+                `Symbol` and its typeset symbol, e.g. into a link; `None` keeps the
+                symbols
 
         Raises:
             ValueError: for symbols which are neither `"id"` nor `"name"`
@@ -276,7 +503,13 @@ class DocumentContext:
         self.system = system
         self.dialect = DIALECTS[fmt]
         self.printer = self.dialect.printer()
-        self.symbols = self._symbols(symbols == "name")
+        # the symbols as they are typeset, `symbols` as they are written
+        self.plain = self._symbols(symbols == "name")
+        self.symbols = (
+            self.plain
+            if wrap is None
+            else {sid: wrap(system.symbol(sid), t) for sid, t in self.plain.items()}
+        )
         self.ruled = {
             a.variable for a in system.assignments if a.origin == "assignment_rule"
         }
@@ -398,7 +631,16 @@ class DocumentContext:
     # --- the sections -------------------------------------------------------------
 
     def build(self, options: Mapping[str, object]) -> dict[str, object]:
-        """The context, see the module."""
+        """The context of a template: the sections of `typeset` and the options."""
+        typeset = self.typeset()
+        context: dict[str, object] = {
+            f.name: getattr(typeset, f.name) for f in fields(typeset)
+        }
+        context["options"] = dict(options)
+        return context
+
+    def typeset(self) -> TypesetSystem:
+        """The system typeset for the dialect, see the module."""
         system = self.system
         info = system.info
         if info.sid is not None:
@@ -410,99 +652,101 @@ class DocumentContext:
             # an id may break after an underscore
             title = self.breakable(info.sid or "Model")
             plain = self.dialect.text(info.sid or "Model")
-        return {
-            "model": {
-                "title": title,
-                "plain_title": plain,
-                "id": None if info.sid is None else self.code(info.sid),
-                "level": info.level,
-                "version": info.version,
-                "source": None if info.source is None else self.breakable(info.source),
-                "sbmlode": sbmlode.__version__,
-                "notes": [
+        return TypesetSystem(
+            model=TypesetModel(
+                title=title,
+                plain_title=plain,
+                id=None if info.sid is None else self.code(info.sid),
+                level=info.level,
+                version=info.version,
+                source=None if info.source is None else self.breakable(info.source),
+                sbmlode=sbmlode.__version__,
+                notes=tuple(
                     self.dialect.text(paragraph)
                     for paragraph in (info.notes or "").split("\n\n")
                     if paragraph.strip()
-                ],
-            },
-            "units": [
-                {"kind": kind, "unit": self.unit(unit)}
+                ),
+            ),
+            units=tuple(
+                TypesetUnit(kind, self.unit(unit))
                 for kind, unit in info.units.items()
                 if unit
-            ],
-            "compartments": [self.row(q) for q in system.compartments],
-            "species": [self.species_row(q) for q in system.species],
-            "parameters": [
+            ),
+            compartments=tuple(self.row(q) for q in system.compartments),
+            species=tuple(self.species_row(q) for q in system.species),
+            parameters=tuple(
                 self.row(q) for q in (*system.parameters, *system.species_references)
-            ],
-            "functions": [self.function(k) for k in range(len(system.functions))],
-            "initial": [
-                {
-                    "lhs": self.symbols[a.variable],
-                    "lines": self.lines(a.math),
-                    "origin": a.origin,
-                }
+            ),
+            functions=tuple(self.function(k) for k in range(len(system.functions))),
+            initial=tuple(
+                self.equation(a.variable, self.lines(a.math), a.origin)
                 for a in system.initial
                 if a.origin == "initial_assignment"
                 or (a.origin == "initial_value" and not is_number(a.math))
-            ],
-            "assignments": [
-                {
-                    "lhs": self.symbols[a.variable],
-                    "lines": self.lines(a.math),
-                    "origin": a.origin,
-                }
+            ),
+            assignments=tuple(
+                self.equation(a.variable, self.lines(a.math), a.origin)
                 for a in system.assignments
                 if a.origin in ("assignment_rule", "concentration")
-            ],
-            "amounts": [
-                {
-                    "amount": self.symbols[q.symbol.sid],
-                    "species": self.symbols[str(q.amount_of)],
-                    "compartment": self.symbols[str(q.compartment)],
-                }
+            ),
+            amounts=tuple(
+                TypesetAmount(
+                    amount=self.symbols[q.symbol.sid],
+                    species=self.symbols[str(q.amount_of)],
+                    compartment=self.symbols[str(q.compartment)],
+                )
                 for q in system.amounts
-            ],
-            "reactions": [self.reaction(k) for k in range(len(system.reactions))],
-            "odes": [self.ode(ode) for ode in system.odes],
-            "events": [self.event(k) for k in range(len(system.events))],
-            "unsupported": [
-                {"construct": self.dialect.text(construct), "id": self.label(sid)}
+            ),
+            reactions=tuple(self.reaction(k) for k in range(len(system.reactions))),
+            odes=tuple(self.ode(ode) for ode in system.odes),
+            events=tuple(self.event(k) for k in range(len(system.events))),
+            unsupported=tuple(
+                TypesetUnsupported(self.dialect.text(construct), self.label(sid), sid)
                 for construct, sid in system.unsupported
-            ],
-            "options": dict(options),
-        }
+            ),
+        )
 
-    def row(self, quantity: Quantity) -> dict[str, object]:
+    def equation(
+        self, variable: str, lines: Sequence[str], origin: str
+    ) -> TypesetEquation:
+        """An equation of a variable, its symbol as the left hand side."""
+        return TypesetEquation(
+            variable=self.system.symbol(variable),
+            lhs=self.symbols[variable],
+            lines=tuple(lines),
+            origin=origin,
+        )
+
+    def row(self, quantity: Quantity) -> TypesetRow:
         """The row of a compartment or a parameter in its table."""
         symbol = quantity.symbol
-        return {
-            "symbol": self.symbols[symbol.sid],
-            "id": self.code(symbol.sid),
-            "long_id": len(symbol.sid) > LONG_ID,
-            "name": self.text(symbol.name),
+        return TypesetRow(
+            symbol=self.symbols[symbol.sid],
+            id=self.code(symbol.sid),
+            long_id=len(symbol.sid) > LONG_ID,
+            name=self.text(symbol.name),
             # the value of a quantity with a rule is the value of its rule
-            "value": None if symbol.sid in self.ruled else self.number(quantity.value),
-            "unit": self.unit(symbol.unit),
-            "constant": quantity.constant,
-        }
+            value=None if symbol.sid in self.ruled else self.number(quantity.value),
+            unit=self.unit(symbol.unit),
+            constant=quantity.constant,
+        )
 
-    def species_row(self, quantity: Quantity) -> dict[str, object]:
+    def species_row(self, quantity: Quantity) -> TypesetSpeciesRow:
         """The row of a species in its table."""
         properties = ["amount" if quantity.amount else "concentration"]
         if quantity.boundary:
             properties.append("boundary")
         if quantity.constant:
             properties.append("constant")
-        return {
-            **self.row(quantity),
-            "compartment": (
+        return TypesetSpeciesRow(
+            **{f.name: getattr(self.row(quantity), f.name) for f in fields(TypesetRow)},
+            compartment=(
                 self.symbols[quantity.compartment] if quantity.compartment else None
             ),
-            "properties": self.dialect.text(", ".join(properties)),
-        }
+            properties=self.dialect.text(", ".join(properties)),
+        )
 
-    def function(self, index: int) -> dict[str, object]:
+    def function(self, index: int) -> TypesetFunction:
         """A function definition, `f(x, y) = ...`."""
         function = self.system.functions[index]
         dialect = self.dialect.symbols
@@ -514,12 +758,13 @@ class DocumentContext:
             self.symbols[function.symbol.sid],
             [Printed(arguments[a], Precedence.ATOM) for a in function.arguments],
         ).code
-        return {
-            "id": self.code(function.symbol.sid),
-            "name": self.text(function.symbol.name),
-            "lhs": lhs,
-            "rhs": self.printer.print(function.body, {**functions, **arguments}),
-        }
+        return TypesetFunction(
+            variable=function.symbol,
+            id=self.code(function.symbol.sid),
+            name=self.text(function.symbol.name),
+            lhs=lhs,
+            rhs=self.printer.print(function.body, {**functions, **arguments}),
+        )
 
     def _side(self, participants: Sequence[Participant]) -> str:
         """A side of a reaction equation, `2 A + B`, `∅` without species."""
@@ -540,28 +785,29 @@ class DocumentContext:
             )
         return " + ".join(terms)
 
-    def reaction(self, index: int) -> dict[str, object]:
+    def reaction(self, index: int) -> TypesetReaction:
         """A reaction: its equation and its rate."""
         reaction = self.system.reactions[index]
         arrow = self.dialect.reversible if reaction.reversible else self.dialect.arrow
         equation = (
             f"{self._side(reaction.reactants)} {arrow} {self._side(reaction.products)}"
         )
-        return {
-            "symbol": self.symbols[reaction.symbol.sid],
-            "id": self.code(reaction.symbol.sid),
-            "long_id": len(reaction.symbol.sid) > LONG_ID,
-            "name": self.text(reaction.symbol.name),
-            "equation": equation,
-            "modifiers": ", ".join(self.symbols[m] for m in reaction.modifiers) or None,
-            "local_parameters": ", ".join(
+        return TypesetReaction(
+            variable=reaction.symbol,
+            symbol=self.symbols[reaction.symbol.sid],
+            id=self.code(reaction.symbol.sid),
+            long_id=len(reaction.symbol.sid) > LONG_ID,
+            name=self.text(reaction.symbol.name),
+            equation=equation,
+            modifiers=", ".join(self.symbols[m] for m in reaction.modifiers) or None,
+            local_parameters=", ".join(
                 self.symbols[p] for p in reaction.local_parameters
             )
             or None,
-            "lines": self.lines(reaction.rate),
-        }
+            lines=tuple(self.lines(reaction.rate)),
+        )
 
-    def ode(self, ode: Ode) -> dict[str, object]:
+    def ode(self, ode: Ode) -> TypesetEquation:
         """The ODE of a state, with the rates of the reactions.
 
         The reaction terms of a species in concentration are divided by its volume,
@@ -586,36 +832,38 @@ class DocumentContext:
                 lines[0] = f"{factor} {left} {lines[0]}"
                 lines[-1] = f"{lines[-1]} {right}"
         symbol = self.symbols[ode.variable]
+        plain = self.plain[ode.variable]
         # a symbol of upright letters is set apart from the upright d, d PX; typst
         # spaces a string of letters without a subscript as a word itself
-        if symbol.startswith(r"\mathrm"):
+        if plain.startswith(r"\mathrm"):
             symbol = rf"\,{symbol}"
-        elif symbol.startswith("upright(") and ")_(" in symbol:
+        elif plain.startswith("upright(") and ")_(" in plain:
             symbol = f"thin {symbol}"
-        return {
-            "lhs": self.dialect.derivative.replace("{symbol}", symbol),
-            "lines": lines,
-            "origin": ode.origin,
-        }
+        return TypesetEquation(
+            variable=self.system.symbol(ode.variable),
+            lhs=self.dialect.derivative.replace("{symbol}", symbol),
+            lines=tuple(lines),
+            origin=ode.origin,
+        )
 
-    def event(self, index: int) -> dict[str, object]:
+    def event(self, index: int) -> TypesetEvent:
         """An event: its trigger, delay, priority, flags and assignments."""
         event = self.system.events[index]
         symbol = event.symbol
-        assignments = [self.event_assignment(a) for a in event.assignments]
-        return {
-            "id": self.code(symbol.sid),
-            "name": self.text(symbol.name),
-            "trigger": self.condition(event.trigger),
-            "delay": self.math(event.delay),
-            "priority": self.math(event.priority),
-            "initial_value": event.initial_value,
-            "persistent": event.persistent,
-            "use_trigger_values": event.use_values_from_trigger_time,
-            "assignments": assignments,
-        }
+        return TypesetEvent(
+            symbol=symbol,
+            id=self.code(symbol.sid),
+            name=self.text(symbol.name),
+            trigger=self.condition(event.trigger),
+            delay=self.math(event.delay),
+            priority=self.math(event.priority),
+            initial_value=event.initial_value,
+            persistent=event.persistent,
+            use_trigger_values=event.use_values_from_trigger_time,
+            assignments=tuple(self.event_assignment(a) for a in event.assignments),
+        )
 
-    def event_assignment(self, assignment: EventAssignment) -> dict[str, str | None]:
+    def event_assignment(self, assignment: EventAssignment) -> TypesetEventAssignment:
         """An event assignment with its effective value, `value · scale / new(divisor)`.
 
         The conversion of a size is `amount`, the value of an amount is a
@@ -646,16 +894,17 @@ class DocumentContext:
         elif assignment.scale is not None and quantity.amount_of is not None:
             conversion = "amount"
             compartment = self.symbols[str(quantity.compartment)]
-        return {
-            "lhs": self.symbols[assignment.variable],
-            "rhs": self.printer.print(value, symbols),
-            "conversion": conversion,
-            "species": None
+        return TypesetEventAssignment(
+            variable=self.system.symbol(assignment.variable),
+            lhs=self.symbols[assignment.variable],
+            rhs=self.printer.print(value, symbols),
+            conversion=conversion,
+            species=None
             if quantity.amount_of is None
             else self.symbols[quantity.amount_of],
-            "compartment": compartment,
-            "new": new,
-        }
+            compartment=compartment,
+            new=new,
+        )
 
 
 def _one() -> libsbml.ASTNode:

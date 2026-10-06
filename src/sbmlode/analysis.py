@@ -302,15 +302,25 @@ class _Analysis:
         return udef_to_string(uid, self.model) if uid else None
 
     def _symbol(
-        self, element: libsbml.SBase, kind: Kind, unit: str | None, sid: str = ""
+        self,
+        element: libsbml.SBase,
+        kind: Kind,
+        unit: str | None,
+        sid: str = "",
+        source: tuple[str, ...] = (),
     ) -> Symbol:
-        """The symbol of an element, under the given id if it is renamed."""
+        """The symbol of an element, under the given id if it is renamed.
+
+        `source` is the element of the model a renamed symbol stands for, see
+        `Symbol.element`.
+        """
         return Symbol(
             sid=sid or element.getId(),
             name=element.getName() if element.isSetName() else None,
             unit=unit,
             sbo=element.getSBOTermID() if element.isSetSBOTerm() else None,
             kind=kind,
+            element=source,
         )
 
     def _math(self, element: str, ast: libsbml.ASTNode) -> libsbml.ASTNode:
@@ -500,7 +510,11 @@ class _Analysis:
                 sid = self._unique(f"{rid}_{parameter.getId()}")
                 renamed[parameter.getId()] = sid
                 symbol = self._symbol(
-                    parameter, "parameter", self._unit(parameter.getUnits()), sid
+                    parameter,
+                    "parameter",
+                    self._unit(parameter.getUnits()),
+                    sid,
+                    (rid, parameter.getId()),
                 )
                 value = parameter.getValue() if parameter.isSetValue() else None
                 local_parameters.append(Quantity(symbol, value, True, "constant"))
@@ -627,6 +641,7 @@ class _Analysis:
                             substance,
                             None,
                             "species",
+                            (sid,),
                         ),
                         value=(
                             species.getInitialAmount()
