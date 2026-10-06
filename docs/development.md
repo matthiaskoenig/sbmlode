@@ -128,7 +128,7 @@ uv run zensical build --clean --strict                 # the build, a broken lin
 A release is made from `develop`:
 
 1. branch off `develop`: `git switch -c release/x.y.z develop`
-2. write the release notes in `release-notes/x.y.z.md`, they are the body of the GitHub release and a section of the release notes page
+2. write the release notes in `release-notes/x.y.z.md`, the title and the logo as in the notes of the earlier releases; they are the body of the GitHub release and a section of the release notes page
 3. bump the version: `uv run bump-my-version bump [major|minor|patch]`, which updates `src/sbmlode/__init__.py` and `CITATION.cff`, regenerates `docs/release-notes.md` and commits, without a tag
 4. push the branch, open the pull request against `develop` and merge it once the checks are green
 5. tag the merged commit on `develop` and push the tag:

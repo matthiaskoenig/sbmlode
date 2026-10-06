@@ -29,6 +29,8 @@ nav = [
 
 [project.theme]
 language = "en"
+favicon = "images/favicon/favicon.ico"
+logo = "images/favicon/sbmlode-200x200.png"
 features = [
   "content.action.edit",
   "content.code.annotate",
