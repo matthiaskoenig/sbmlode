@@ -7,7 +7,7 @@ name = "sbmlode"
 dynamic = ["version"]
 description = "sbmlode writes the ordinary differential equations of SBML models as python, julia and R code and as LaTeX, typst and markdown documents."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Matthias König", email = "konigmatt@googlemail.com" }]
@@ -16,7 +16,6 @@ classifiers = [
 	"Development Status :: 4 - Beta",
 	"Intended Audience :: Science/Research",
 	"Operating System :: OS Independent",
-	"Programming Language :: Python :: 3.11",
 	"Programming Language :: Python :: 3.12",
 	"Programming Language :: Python :: 3.13",
 	"Programming Language :: Python :: 3.14",

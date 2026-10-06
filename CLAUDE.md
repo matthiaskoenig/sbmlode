@@ -4,7 +4,7 @@ This file provides guidance when working with code in this repository.
 
 ## Project
 
-`sbmlode` writes the system of ordinary differential equations of an SBML model as python, julia and R code which simulates it, as typst, LaTeX and markdown documents which describe it, and as typed data (`OdeSystem.typeset`) for an application which lays out the equations itself (SBML4Humans). Pure library, no CLI. Requires python >= 3.11, packaged with hatchling (version read from `src/sbmlode/__init__.py`). Runtime dependencies are `python-libsbml` and `jinja2` only, keep it so: no pint, numpy or sbmlutils in the package. The `simulate` extra (numpy, pandas, scipy) is what the generated python code runs with, the `test` extra what the tests need (antimony, libroadrunner as the reference, typst, markdown-it-py), `dev` everything. It is the ODE export of sbmlutils 0.14 (`sbmlutils.converters.ode`), which sbmlutils re-exports from 0.15 on.
+`sbmlode` writes the system of ordinary differential equations of an SBML model as python, julia and R code which simulates it, as typst, LaTeX and markdown documents which describe it, and as typed data (`OdeSystem.typeset`) for an application which lays out the equations itself (SBML4Humans). Pure library, no CLI. Requires python >= 3.12, packaged with hatchling (version read from `src/sbmlode/__init__.py`). Runtime dependencies are `python-libsbml` and `jinja2` only, keep it so: no pint, numpy or sbmlutils in the package. The `simulate` extra (numpy, pandas, scipy) is what the generated python code runs with, the `test` extra what the tests need (antimony, libroadrunner as the reference, typst, markdown-it-py), `dev` everything. It is the ODE export of sbmlutils 0.14 (`sbmlutils.converters.ode`), which sbmlutils re-exports from 0.15 on.
 
 ## Commands
 
@@ -15,7 +15,7 @@ uv lock                                       # after every change of a dependen
 
 uv run pytest -m "not sbml_testsuite"         # the suite, what continuous integration runs
 uv run pytest -m sbml_testsuite               # the sweep over the SBML test suite
-tox r -e py3.14 -- tests/test_ode_system.py   # one module in a tox env (py3.11-3.15, lowest, ty)
+tox r -e py3.14 -- tests/test_ode_system.py   # one module in a tox env (py3.12-3.15, lowest, ty)
 tox r -e julia | tox r -e R | tox r -e latex  # the toolchains, see docs/development.md
 uv run python scripts/ode_report.py           # pass rates over the SBML test suite, `--format julia --format r`
 SBMLODE_UPDATE_GOLDEN=1 uv run pytest tests/test_ode_presentation.py -k golden   # rewrite tests/golden/
