@@ -37,6 +37,27 @@ The ODE system of the repressilator of Elowitz and Leibler (BIOMD0000000012), as
 
 The [Guide](formats.md) describes the formats, their options, the supported SBML and the verification, the [API reference](api.md) the classes and functions.
 
+## How to cite
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
+
+If you use sbmlode please cite the archived software on [Zenodo](https://doi.org/10.5281/zenodo.23179199):
+
+> König, M. (2026). *sbmlode: ordinary differential equations of SBML models* (Version 0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.23179200
+
+```bibtex
+@software{koenig_sbmlode,
+  author    = {König, Matthias},
+  title     = {sbmlode: ordinary differential equations of SBML models},
+  year      = {2026},
+  month     = oct,
+  version   = {0.1.0},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.23179200},
+  url       = {https://doi.org/10.5281/zenodo.23179200},
+}
+```
+
 ## License
 
 sbmlode is open source under the [MIT license](https://github.com/matthiaskoenig/sbmlode/blob/develop/LICENSE). Please [open an issue](https://github.com/matthiaskoenig/sbmlode/issues) for a question or a problem.
