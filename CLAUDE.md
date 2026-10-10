@@ -13,7 +13,7 @@ uv sync --extra dev
 uv run pre-commit install
 uv lock                                       # after every change of a dependency in pyproject.toml
 
-uv run pytest -n auto -m "not sbml_testsuite" # the suite in parallel (pytest-xdist); CI also deselects `slow`
+uv run pytest -n auto --dist loadgroup -m "not sbml_testsuite"   # the suite in parallel (pytest-xdist); CI also deselects `slow`
 uv run pytest -m sbml_testsuite               # the sweep over the SBML test suite
 tox r -e py3.14 -- tests/test_ode_system.py   # one module in a tox env (py3.12-3.15, lowest, ty)
 tox run-parallel                              # py3.12-3.15, lowest and ty, run before opening a pull request
