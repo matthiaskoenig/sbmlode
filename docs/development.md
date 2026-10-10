@@ -17,7 +17,7 @@ Neither branch accepts a direct push, every change goes through a pull request a
 
 | check | workflow | content |
 | --- | --- | --- |
-| `tests` | `ci-cd.yml` | the test matrix, linux with python 3.12 to 3.15 and the lowest versions of the dependencies, macos and windows with 3.14 |
+| `tests` | `ci-cd.yml` | the test matrix, python 3.14 on linux, macos and windows |
 | `R` | `ci-cd.yml` | the generated R code, run with Rscript and deSolve |
 | `latex` | `ci-cd.yml` | the typst and LaTeX documents, compiled with typst and tectonic |
 | `ruff` | `ruff.yml` | `ruff check` and `ruff format --check` |
@@ -25,6 +25,8 @@ Neither branch accepts a direct push, every change goes through a pull request a
 | `docs` | `docs.yml` | the release notes check and the strict zensical build including the API reference |
 
 `tests` aggregates the test matrix into a single job, so the name of the required check stays the same when the matrix changes. The job `julia` runs the generated julia code; its packages take long to install and precompile, so it runs only for a release tag and on demand (`workflow_dispatch`): it is no required check of a pull request, but the release of a tag waits for it.
+
+Continuous integration is kept small: every workflow cancels its running build when a newer commit of the same branch or pull request arrives, uv caches the packages and the interpreters between runs, dependabot proposes its updates once a month, and the matrix tests only the newest python. The other python versions and `lowest` are tested locally with `tox run-parallel`, see [Testing](#testing), before a pull request is opened.
 
 Further rules: conversations have to be resolved before the merge, an approval is dismissed when new commits are pushed, the history stays linear (squash or rebase, no merge commits), and the maintainer is the code owner (`.github/CODEOWNERS`).
 
@@ -62,7 +64,12 @@ uv run pytest -m sbml_testsuite               # the sweep, every case of the SBM
 tox r -e py3.14                               # one python version, as continuous integration runs it
 tox r -e py3.14 -- tests/test_ode_system.py   # one module in it
 tox r -e lowest                               # the lowest versions of the dependencies on python 3.12
+tox run-parallel                              # every environment of `envlist`: py3.12 to py3.15, lowest and ty
 ```
+
+`tox run-parallel` is the complete test and is run before a pull request is opened: continuous integration runs only `py3.14`, on linux, macos and windows, and `lowest` and the other python versions only run locally. It needs the interpreters, which uv installs with `uv python install 3.12 3.13 3.14 3.15`.
+
+The tox environments run the tests in parallel on every core (pytest-xdist, `-n auto --dist loadgroup`), `uv run pytest -n auto --dist loadgroup` does the same in the development environment. The tests which share the julia or R process of a module run on one worker (`tests/conftest.py`), so that every worker does not start that process again. A test which takes half a minute or longer, the reverse mode of `DirectAdjoint` whose compilation by JAX takes that long, is marked `slow`: it runs locally, continuous integration deselects it with `-m "not sbml_testsuite and not slow"` and lists the 15 slowest tests (`--durations=15`), so that a test which becomes slow is seen.
 
 The tests download the semantic cases of the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite) 3.4.0 once into the cache directory (`$XDG_CACHE_HOME/sbmlode`, else `~/.cache/sbmlode`); `SBMLODE_TESTSUITE` names a directory which holds `semantic/` instead. Offline and without it, the tests which read a case skip. The golden documents of `tests/golden/` are written again with `SBMLODE_UPDATE_GOLDEN=1`.
 

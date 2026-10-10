@@ -15,8 +15,9 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # superseded branch runs are cancelled, release runs are never cancelled
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  # a newer run supersedes the running one of the same branch or pull request;
+  # a release is never superseded, every tag is a group of its own
+  cancel-in-progress: true
 
 env:
   # the tools run with uvx are pinned, dependabot does not update them
@@ -36,32 +37,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # continuous integration tests the newest python on every platform, the
+        # older and newer versions and `lowest` are tested locally with
+        # `tox run-parallel`, see docs/development.md
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.12", "3.13", "3.14"]
-        # `py` (or none, as in the entries below) runs the environment of the
-        # python version, e.g. `py3.14`; another value runs that environment
-        tox-env: [py]
-        # Linux covers the full range with the reference simulations; Windows and
-        # macOS cover only its newest version, 3.14. A core-only 3.15 job on
-        # Linux is added below.
-        exclude:
-          - os: windows-latest
-            python-version: "3.12"
-          - os: windows-latest
-            python-version: "3.13"
-          - os: macos-latest
-            python-version: "3.12"
-          - os: macos-latest
-            python-version: "3.13"
-        # Keep the full suite on 3.14 while libroadrunner lacks 3.15 wheels.
-        include:
-          - os: ubuntu-latest
-            python-version: "3.15"
-          # the suite against the lower bounds of the dependencies, see the
-          # `lowest` environment of tox.ini, which is pinned to python 3.12
-          - os: ubuntu-latest
-            python-version: "3.12"
-            tox-env: lowest
+        python-version: ["3.14"]
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -75,6 +55,8 @@ jobs:
         # a release run restores no cache, which zizmor cannot tell from the
         # expression; the distributions are built without one, see `build`
         enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+        # the interpreter is cached with the packages instead of downloaded by every run
+        cache-python: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
     - name: Put libpython on the library search path (linux only)
       # the extension of libroadrunner links against libpython3.X.so.1.0. The
       # standalone interpreters of uv ship it in their `lib` directory but are
@@ -90,8 +72,12 @@ jobs:
       shell: bash
     - name: Test with tox
       env:
-        TOX_ENV: ${{ matrix.tox-env != 'py' && matrix.tox-env || format('py{0}', matrix.python-version) }}
-      run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e "${TOX_ENV}"
+        TOX_ENV: py${{ matrix.python-version }}
+      # the tests marked `slow` run locally only; the slowest tests are listed so
+      # that a test which becomes slow is seen
+      run: >-
+        uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e "${TOX_ENV}"
+        -- -m "not sbml_testsuite and not slow" --durations=15
       shell: bash
 
   tests:
@@ -142,6 +128,8 @@ jobs:
         # a release run restores no cache, which zizmor cannot tell from the
         # expression; the distributions are built without one, see `build`
         enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+        # the interpreter is cached with the packages instead of downloaded by every run
+        cache-python: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
     - name: Put libpython on the library search path
       # the extension of libroadrunner links against libpython, see the `test` job
       run: |
@@ -192,6 +180,8 @@ jobs:
         # a release run restores no cache, which zizmor cannot tell from the
         # expression; the distributions are built without one, see `build`
         enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+        # the interpreter is cached with the packages instead of downloaded by every run
+        cache-python: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
     - name: Put libpython on the library search path
       # the extension of libroadrunner links against libpython, see the `test` job
       run: |
@@ -243,6 +233,8 @@ jobs:
         # a release run restores no cache, which zizmor cannot tell from the
         # expression; the distributions are built without one, see `build`
         enable-cache: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
+        # the interpreter is cached with the packages instead of downloaded by every run
+        cache-python: ${{ !startsWith(github.ref, 'refs/tags/') }}  # zizmor: ignore[cache-poisoning]
     - name: Install tectonic
       # the statically linked binary of the release; tectonic downloads the TeX
       # packages a document uses at its first run
@@ -255,6 +247,16 @@ jobs:
         tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/tectonic"
         echo "${RUNNER_TEMP}/tectonic" >> "$GITHUB_PATH"
       shell: bash
+    - name: Cache the TeX packages of tectonic
+      # tectonic downloads the packages a document uses into ~/.cache/tectonic
+      # (tox passes HOME on); a release run restores no cache, which zizmor cannot
+      # tell from the condition, see the cache of uv above
+      if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0  # zizmor: ignore[cache-poisoning]
+      with:
+        path: ~/.cache/tectonic
+        key: tectonic-${{ env.TECTONIC_VERSION }}-${{ hashFiles('src/sbmlode/templates/latex.tex.jinja') }}
+        restore-keys: tectonic-${{ env.TECTONIC_VERSION }}-
     - name: Test with tox
       run: uvx --with "tox-uv==${TOX_UV_VERSION}" "tox@${TOX_VERSION}" -e latex
 

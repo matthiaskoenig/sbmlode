@@ -19,6 +19,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import urllib.request
 import zipfile
 from collections.abc import Sequence
@@ -47,6 +48,10 @@ def _cache_dir() -> Path:
 def _semantic_dir() -> Path:
     """The directory of the semantic cases, downloaded once into the cache.
 
+    The workers of pytest-xdist import this module at the same time: each one
+    downloads into a directory of its own, the first rename wins and the others
+    discard theirs.
+
     Returns:
         the directory, which does not exist if the cases could not be downloaded
     """
@@ -59,13 +64,17 @@ def _semantic_dir() -> Path:
         return semantic
     try:
         root.mkdir(parents=True, exist_ok=True)
-        archive = root / "semantic.zip"
-        urllib.request.urlretrieve(TESTSUITE_URL, archive)
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(root.with_suffix(".tmp"))
-        shutil.move(root.with_suffix(".tmp") / "semantic", semantic)
-        shutil.rmtree(root.with_suffix(".tmp"))
-        archive.unlink()
+        with tempfile.TemporaryDirectory(dir=root) as tmp:
+            archive = Path(tmp) / "semantic.zip"
+            urllib.request.urlretrieve(TESTSUITE_URL, archive)
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(tmp)
+            try:
+                (Path(tmp) / "semantic").rename(semantic)
+            except OSError:
+                # another process renamed its download first
+                if not semantic.is_dir():
+                    raise
     except OSError as err:
         logger.warning("The SBML test suite could not be downloaded: %s", err)
     return semantic
