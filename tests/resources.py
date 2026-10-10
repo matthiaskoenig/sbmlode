@@ -1,7 +1,7 @@
 """The models of the tests, copied from the resources of sbmlutils.
 
 `variable_compartment.xml` is written for the native quantities: compartments of a
-rate rule, an assignment rule and an event, see `docs/design`.
+rate rule, an assignment rule and an event.
 """
 
 from pathlib import Path
