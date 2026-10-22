@@ -2,6 +2,21 @@
 
 What changed in every version of sbmlode, the newest first. The notes of a version are the text of its [release on GitHub](https://github.com/matthiaskoenig/sbmlode/releases), where the source of that version is archived.
 
+## 0.3.1
+
+sbmlode 0.3.1 is a security release of its development tooling: the uv with which the lock, the tests and the release are made no longer trusts the emSign root CA whose intermediate keys were compromised. The package and the code it writes are unchanged.
+
+### Security
+- uv 0.13.4 in continuous integration, in the release workflow and in the lock (the uv of tox-uv), whose bundled CA store drops the emSign root ([GHSA-hq85-5cpj-mr62](https://github.com/advisories/GHSA-hq85-5cpj-mr62)); certifi before 2026.10.19 has the same root ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)), but certifi is in neither the runtime nor the development dependencies of sbmlode, so no floor is needed
+
+### Development
+- continuous integration runs the tests on python 3.14 only, on linux, macos and windows, cancels a superseded run and caches the interpreters and the TeX packages; the other python versions and `lowest` run locally with `tox run-parallel`, dependabot proposes its updates monthly
+- the tox environments run pytest in parallel with pytest-xdist (`--dist loadgroup`, the julia and R batches of a module on one worker); the reverse mode of `DirectAdjoint` is marked `slow` and runs locally only
+- ty 0.0.85
+
+### Documentation
+- the design documents and the plans of coding agents are removed from `docs/design/`
+
 ## 0.3.0
 
 sbmlode 0.3.0 writes the ODE system of an SBML model as python code of [JAX](https://docs.jax.dev), which [diffrax](https://docs.kidger.site/diffrax/) simulates: `jax.jit` compiles the simulation, `jax.vmap` batches it over constants and initial states, and `jax.grad` and `jax.jacfwd` differentiate it, a model with events included. It passes every case of the SBML test suite which it supports and libroadrunner simulates. sbmlode requires python 3.12 or newer, as jax does.
