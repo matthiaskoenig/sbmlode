@@ -2,6 +2,8 @@
 
 # sbmlode
 
+[![Python versions](https://img.shields.io/pypi/pyversions/sbmlode.svg)](https://pypi.org/project/sbmlode/)
+
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it
 
 - as **code** which simulates the model: **python** (numpy and scipy), **diffrax** (python with JAX and diffrax, which `jax.jit` compiles, `jax.vmap` batches and `jax.grad` differentiates), **julia** (OrdinaryDiffEq.jl) and **R** (deSolve), verified against [libroadrunner](https://libroadrunner.org) over the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite);

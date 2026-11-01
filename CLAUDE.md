@@ -15,7 +15,7 @@ uv lock                                       # after every change of a dependen
 
 uv run pytest -n auto --dist loadgroup -m "not sbml_testsuite"   # the suite in parallel (pytest-xdist); CI also deselects `slow`
 uv run pytest -m sbml_testsuite               # the sweep over the SBML test suite
-tox r -e py3.14 -- tests/test_ode_system.py   # one module in a tox env (py3.12-3.15, lowest, ty)
+tox r -e py3.15 -- tests/test_ode_system.py   # one module in a tox env (py3.12-3.15, lowest, ty)
 tox run-parallel                              # py3.12-3.15, lowest and ty, run before opening a pull request
 tox r -e julia | tox r -e R | tox r -e latex  # the toolchains, see docs/development.md
 uv run python scripts/ode_report.py           # pass rates over the SBML test suite, `--format diffrax --format julia --format r`
@@ -31,7 +31,7 @@ uv run zensical build --clean --strict
 
 The tests download the semantic cases of the SBML test suite 3.4.0 into `$XDG_CACHE_HOME/sbmlode` (`~/.cache/sbmlode`), or read `SBMLODE_TESTSUITE`; offline they skip. Julia and R run through the command prefixes `SBMLODE_JULIA` and `SBMLODE_RSCRIPT` (docker works, see `docs/development.md`); their tests skip without the toolchain and fail with `SBMLODE_REQUIRE_TOOLCHAINS=1`, which the tox environments `julia`, `R` and `latex` set.
 
-`develop` is the default branch and takes every change through a pull request; the rulesets in `.github/rulesets/` (applied with `apply.sh`) require the checks `tests`, `R`, `latex`, `ruff`, `ty` and `docs`, squash or rebase merges only. Continuous integration is kept minimal: `tests` runs only `py3.14`, on linux, macos and windows, every workflow cancels a superseded run (`cancel-in-progress: true`), uv caches packages and interpreters, dependabot runs monthly. The other python versions and `lowest` run only locally. `main` only tracks the latest release and is fast-forwarded by `sync-main` of `ci-cd.yml`. Releases: write `release-notes/<version>.md`, `uv run bump-my-version bump [major|minor|patch]` (updates `__init__.py` and `CITATION.cff`, regenerates the release notes page, commits without tag), pull request, then the tag on `develop` triggers the PyPI release.
+`develop` is the default branch and takes every change through a pull request; the rulesets in `.github/rulesets/` (applied with `apply.sh`) require the checks `tests`, `R`, `latex`, `ruff`, `ty` and `docs`, squash or rebase merges only. Continuous integration is kept minimal: `tests` runs only `py3.15`, on linux, macos and windows, every workflow cancels a superseded run (`cancel-in-progress: true`), uv caches packages and interpreters, dependabot runs monthly. The other python versions and `lowest` run only locally. `main` only tracks the latest release and is fast-forwarded by `sync-main` of `ci-cd.yml`. Releases: write `release-notes/<version>.md`, `uv run bump-my-version bump [major|minor|patch]` (updates `__init__.py` and `CITATION.cff`, regenerates the release notes page, commits without tag), pull request, then the tag on `develop` triggers the PyPI release.
 
 ## Architecture
 
