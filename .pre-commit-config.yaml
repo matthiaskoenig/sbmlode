@@ -6,7 +6,7 @@
 
 # The golden files and the models of the tests and the output of the export in
 # the documentation are content, not source, so the whitespace hooks below
-# exclude them.
+# exclude them. The vendored MathJax distribution keeps its upstream bytes too.
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -27,10 +27,10 @@ repos:
     description: Check for symlinks which do not point to anything
   - id: trailing-whitespace
     description: Trim trailing whitespaces
-    exclude: '^(tests/golden/|tests/data/|docs/images/)'
+    exclude: '^(tests/golden/|tests/data/|docs/images/|docs/javascripts/mathjax/)'
   - id: end-of-file-fixer
     description: Fix empty lines at ends of files
-    exclude: '^(tests/golden/|tests/data/|docs/images/)'
+    exclude: '^(tests/golden/|tests/data/|docs/images/|docs/javascripts/mathjax/)'
   - id: detect-private-key
     description: Detects the presence of private keys
   - id: check-case-conflict
@@ -38,7 +38,7 @@ repos:
   - id: mixed-line-ending
     description: Normalize mixed line endings
     args: [ --fix=lf ]
-    exclude: '^(tests/golden/|tests/data/|docs/images/)'
+    exclude: '^(tests/golden/|tests/data/|docs/images/|docs/javascripts/mathjax/)'
   - id: debug-statements
     description: Check for forgotten breakpoints and debugger imports
 

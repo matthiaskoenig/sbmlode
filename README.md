@@ -2,7 +2,7 @@
 
 # sbmlode
 
-[![PyPI](https://img.shields.io/pypi/v/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![CI-CD](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml) [![Documentation](https://img.shields.io/badge/docs-zensical-teal)](https://matthiaskoenig.github.io/sbmlode/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
+[![PyPI](https://img.shields.io/pypi/v/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![Python versions](https://img.shields.io/pypi/pyversions/sbmlode.svg)](https://pypi.org/project/sbmlode/) [![CI-CD](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/matthiaskoenig/sbmlode/actions/workflows/ci-cd.yml) [![Documentation](https://img.shields.io/badge/docs-zensical-teal)](https://matthiaskoenig.github.io/sbmlode/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23179199.svg)](https://doi.org/10.5281/zenodo.23179199)
 
 An SBML model describes a system of ordinary differential equations (ODEs), but it is not written as one: the equations follow from the reactions, rules, events and units of the model. `sbmlode` derives this system once and writes it
 

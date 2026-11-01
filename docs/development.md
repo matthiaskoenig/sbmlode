@@ -17,7 +17,7 @@ Neither branch accepts a direct push, every change goes through a pull request a
 
 | check | workflow | content |
 | --- | --- | --- |
-| `tests` | `ci-cd.yml` | the test matrix, python 3.14 on linux, macos and windows |
+| `tests` | `ci-cd.yml` | the test matrix, python 3.15 on linux, macos and windows |
 | `R` | `ci-cd.yml` | the generated R code, run with Rscript and deSolve |
 | `latex` | `ci-cd.yml` | the typst and LaTeX documents, compiled with typst and tectonic |
 | `ruff` | `ruff.yml` | `ruff check` and `ruff format --check` |
@@ -61,19 +61,19 @@ The environment is resolved from the committed `uv.lock`; after a change of a de
 ```bash
 uv run pytest -m "not sbml_testsuite"         # the suite without the sweep over the SBML test suite
 uv run pytest -m sbml_testsuite               # the sweep, every case of the SBML test suite
-tox r -e py3.14                               # one python version, as continuous integration runs it
-tox r -e py3.14 -- tests/test_ode_system.py   # one module in it
+tox r -e py3.15                               # one python version, as continuous integration runs it
+tox r -e py3.15 -- tests/test_ode_system.py   # one module in it
 tox r -e lowest                               # the lowest versions of the dependencies on python 3.12
 tox run-parallel                              # every environment of `envlist`: py3.12 to py3.15, lowest and ty
 ```
 
-`tox run-parallel` is the complete test and is run before a pull request is opened: continuous integration runs only `py3.14`, on linux, macos and windows, and `lowest` and the other python versions only run locally. It needs the interpreters, which uv installs with `uv python install 3.12 3.13 3.14 3.15`.
+`tox run-parallel` is the complete test and is run before a pull request is opened: continuous integration runs only `py3.15`, on linux, macos and windows, and `lowest` and the other python versions only run locally. It needs the interpreters, which uv installs with `uv python install 3.12 3.13 3.14 3.15`.
 
 The tox environments run the tests in parallel on every core (pytest-xdist, `-n auto --dist loadgroup`), `uv run pytest -n auto --dist loadgroup` does the same in the development environment. The tests which share the julia or R process of a module run on one worker (`tests/conftest.py`), so that every worker does not start that process again. A test which takes half a minute or longer, the reverse mode of `DirectAdjoint` whose compilation by JAX takes that long, is marked `slow`: it runs locally, continuous integration deselects it with `-m "not sbml_testsuite and not slow"` and lists the 15 slowest tests (`--durations=15`), so that a test which becomes slow is seen.
 
 The tests download the semantic cases of the [SBML test suite](https://github.com/sbmlteam/sbml-test-suite) 3.4.0 once into the cache directory (`$XDG_CACHE_HOME/sbmlode`, else `~/.cache/sbmlode`); `SBMLODE_TESTSUITE` names a directory which holds `semantic/` instead. Offline and without it, the tests which read a case skip. The golden documents of `tests/golden/` are written again with `SBMLODE_UPDATE_GOLDEN=1`.
 
-On Linux the tests run with the standalone interpreters of uv (`UV_PYTHON_PREFERENCE=only-managed`); the extension of libroadrunner links against `libpython3.X.so.1.0`, which these interpreters ship in their `lib` directory, so the workflow puts that directory on `LD_LIBRARY_PATH`. libroadrunner, the reference of the simulations, has no wheels for python 3.15 yet; the tests which need it skip there.
+On Linux the tests run with the standalone interpreters of uv (`UV_PYTHON_PREFERENCE=only-managed`); the extension of libroadrunner links against `libpython3.X.so.1.0`, which these interpreters ship in their `lib` directory, so the workflow puts that directory on `LD_LIBRARY_PATH`. libroadrunner 2.11.0 supplies wheels for python 3.15 on linux, macos and windows, so the numerical reference tests run on every supported python version.
 
 ### Toolchains
 
