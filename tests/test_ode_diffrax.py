@@ -187,8 +187,8 @@ def test_diffrax_output_times(tmp_path: Path) -> None:
     simulation = module.simulate(ts)
     reference = module.simulate(jnp.linspace(0.0, 7.25, 30))
     assert np.array_equal(simulation.t, ts)
-    assert simulation.x[1] == pytest.approx(simulation.x[2])
-    assert simulation.x[3] == pytest.approx(reference.x[-1], rel=1e-7)
+    np.testing.assert_allclose(simulation.x[1], simulation.x[2], rtol=1e-6)
+    np.testing.assert_allclose(simulation.x[3], reference.x[-1], rtol=1e-7)
     single = module.simulate(jnp.array([0.0]))
     assert np.allclose(single.x, module.initial_values()[0])
 
