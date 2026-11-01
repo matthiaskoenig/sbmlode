@@ -21,6 +21,8 @@ sbmlode 0.3.1 is a security release of its development tooling: the uv with whic
 
 sbmlode 0.3.0 writes the ODE system of an SBML model as python code of [JAX](https://docs.jax.dev), which [diffrax](https://docs.kidger.site/diffrax/) simulates: `jax.jit` compiles the simulation, `jax.vmap` batches it over constants and initial states, and `jax.grad` and `jax.jacfwd` differentiate it, a model with events included. It passes every case of the SBML test suite which it supports and libroadrunner simulates. sbmlode requires python 3.12 or newer, as jax does.
 
+The archived software for this release is available on [Zenodo](https://doi.org/10.5281/zenodo.23190834).
+
 ### New features
 - the format `diffrax` ([#8](https://github.com/matthiaskoenig/sbmlode/issues/8)), written with `system.write("model.py", fmt="diffrax")` (`.py` stays the suffix of `python`): `initial_values(p)`, `f_dxdt(t, x, p)` (a vector field of diffrax), `f_y(t, x, p)`, the functions of the events, and with `simulator=True` `simulate(ts, p, x0, ...)`, which returns a `Simulation` of the output times, states, assigned values and constants, and `to_frame`, its pandas `DataFrame`; the file switches JAX to float64 on import
 - the events of SBML in JAX: delays, priorities, persistence, the initial values of the triggers, the values from the trigger time and cascades, on arrays of fixed shapes (`max_segments`, `max_pending`), in loops of the kind the `adjoint` of diffrax differentiates (`RecursiveCheckpointAdjoint` for `jax.grad`, `ForwardMode` for `jax.jacfwd`, `DirectAdjoint` for both); the derivative includes the shift of an event time with the constants
