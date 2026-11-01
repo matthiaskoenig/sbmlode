@@ -303,7 +303,9 @@ def test_diffrax_vmap(tmp_path: Path) -> None:
     [
         ("RecursiveCheckpointAdjoint", "grad"),
         ("ForwardMode", "jacfwd"),
-        ("DirectAdjoint", "grad"),
+        # the reverse mode of `DirectAdjoint` compiles for half a minute, see the
+        # `slow` marker in pyproject.toml
+        pytest.param("DirectAdjoint", "grad", marks=pytest.mark.slow),
         ("DirectAdjoint", "jacfwd"),
     ],
 )
@@ -656,7 +658,7 @@ def test_diffrax_events_vmap(tmp_path: Path) -> None:
     [
         ("RecursiveCheckpointAdjoint", "grad"),
         ("ForwardMode", "jacfwd"),
-        ("DirectAdjoint", "grad"),
+        pytest.param("DirectAdjoint", "grad", marks=pytest.mark.slow),
     ],
 )
 def test_diffrax_events_gradient(adjoint: str, transform: str, tmp_path: Path) -> None:

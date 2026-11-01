@@ -13,10 +13,10 @@ identifiers:
     value: 10.5281/zenodo.23179199
     description: the concept doi of all versions
   - type: doi
-    value: 10.5281/zenodo.23190834
-    description: the doi of version 0.3.0
-version: "0.3.0"
-date-released: "2026-10-06"
+    value: 10.5281/zenodo.23550486
+    description: the doi of version 0.3.1
+version: "0.3.1"
+date-released: "2026-10-22"
 doi: "10.5281/zenodo.23179199"
 license: MIT
 repository-code: "https://github.com/matthiaskoenig/sbmlode"

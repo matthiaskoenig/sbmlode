@@ -22,10 +22,6 @@ nav = [
   { "Guide" = "formats.md" },
   { "Typed target" = "typeset.md" },
   { "API reference" = "api.md" },
-  { "Design" = [
-    { "ODE export" = "design/2026-10-05-ode-export-design.md" },
-    { "Native quantities" = "design/2026-10-06-native-quantities-design.md" },
-  ] },
   { "Release notes" = "release-notes.md" },
   { "Contributing" = "development.md" },
 ]
@@ -81,10 +77,11 @@ icon = "fontawesome/brands/python"
 link = "https://pypi.org/project/sbmlode/"
 
 # `docs/images/ode` holds the files of the export which `formats.md` includes,
-# `docs/design` the plan of the export next to its design, `docs/javascripts/mathjax`
-# the vendored MathJax with its readme, none of them is a page
+# `docs/javascripts/mathjax` the vendored MathJax with its readme, `docs/superpowers`
+# and `docs/design` the design documents and plans of coding agents, gitignored;
+# none of them is a page
 [project.plugins.exclude]
-glob = ["images/ode/*.md", "design/2026-10-05-ode-export.md", "javascripts/mathjax/README.md"]
+glob = ["images/ode/*.md", "javascripts/mathjax/README.md", "superpowers/*", "design/*"]
 
 # API reference is rendered from the docstrings, see the `docs/api` pages
 [project.plugins.mkdocstrings]

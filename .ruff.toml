@@ -7,7 +7,8 @@ target-version = "py311"
 
 # `.claude` holds agent working documents, whose python blocks are illustrative
 # fragments rather than code which has to run; ruff formats markdown code blocks
-# since 0.16, as are the design documents of `docs/design`. `docs/images` holds the
+# since 0.16, as are the design documents of coding agents in `docs/design`, which
+# are gitignored. `docs/images` holds the
 # code the export writes for the documentation (`scripts/docs_images.py`), which
 # `tests/test_ode_docs.py` keeps equal to the current export. `force-exclude`
 # applies the list to the files pre-commit names as well.

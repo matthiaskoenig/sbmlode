@@ -180,7 +180,9 @@ SIMULATE_JOBS: dict[str, Callable[[], Job]] = {
         for name, antimony in EVENT_MODELS.items()
         if name != "infinite_cascade"
     },
-    "stateless": lambda: Job(
+    # not `stateless`, the name of its model in `POINT_MODELS`: the fixture keeps
+    # the outputs of both processes by the name of the job
+    "stateless_simulate": lambda: Job(
         OdeSystem.from_sbml(model_sbml("k = 2; y := k * time; z := y^2")).render("r"),
         r_simulate_job(4.0, 5),
     ),
@@ -434,7 +436,7 @@ def test_r_simulate_from_x0_and_p(r: Callable[[str], JobOutput]) -> None:
 
 def test_r_model_without_states(r: Callable[[str], JobOutput]) -> None:
     """A model of assignment rules only has no states and simulates."""
-    df = r("stateless").table()
+    df = r("stateless_simulate").table()
     assert list(df.columns) == ["time", "y", "z"]
     assert df["z"].tolist() == pytest.approx([0.0, 4.0, 16.0, 36.0, 64.0])
 
