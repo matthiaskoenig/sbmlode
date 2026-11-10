@@ -375,7 +375,7 @@ def test_unmapped_identifier_message() -> None:
         py("B + 1")
 
 
-@pytest.mark.parametrize("formula", ["rateOf(A)", "delay(A, 1)"])
+@pytest.mark.parametrize("formula", ["rateOf(A)", "delay(A, 1)", "normal(A, 1)"])
 def test_python_unsupported(formula: str) -> None:
     """A construct the python code cannot express raises."""
     with pytest.raises(NotImplementedError):
@@ -1032,6 +1032,33 @@ DOCUMENT_FORMULAS: dict[str, tuple[str, str]] = {
 
 # the constructs with the parentheses their place requires, as LaTeX and as typst
 DOCUMENT_MATH: list[tuple[str, str, str]] = [
+    # the distrib functions, upright with their names in SBML
+    (
+        "uniform(0, A) + k * normal(A, 1, 0, 10) + poisson(k)",
+        r"\operatorname{uniform}\mathopen{}\left(0, A\right)"
+        r" + k \cdot \operatorname{normal}\mathopen{}\left(A, 1, 0, 10\right)"
+        r" + \operatorname{poisson}\mathopen{}\left(k\right)",
+        'op("uniform")(0, A) + k dot op("normal")(A, 1, 0, 10) + op("poisson")(k)',
+    ),
+    (
+        "bernoulli(k) + binomial(3, k) + cauchy(A, k) + chisquare(2) + exponential(k)",
+        r"\operatorname{bernoulli}\mathopen{}\left(k\right)"
+        r" + \operatorname{binomial}\mathopen{}\left(3, k\right)"
+        r" + \operatorname{cauchy}\mathopen{}\left(A, k\right)"
+        r" + \operatorname{chisquare}\mathopen{}\left(2\right)"
+        r" + \operatorname{exponential}\mathopen{}\left(k\right)",
+        'op("bernoulli")(k) + op("binomial")(3, k) + op("cauchy")(A, k)'
+        ' + op("chisquare")(2) + op("exponential")(k)',
+    ),
+    (
+        "gamma(A, k) + laplace(A, k) + lognormal(A, k) + rayleigh(k)",
+        r"\operatorname{gamma}\mathopen{}\left(A, k\right)"
+        r" + \operatorname{laplace}\mathopen{}\left(A, k\right)"
+        r" + \operatorname{lognormal}\mathopen{}\left(A, k\right)"
+        r" + \operatorname{rayleigh}\mathopen{}\left(k\right)",
+        'op("gamma")(A, k) + op("laplace")(A, k) + op("lognormal")(A, k)'
+        ' + op("rayleigh")(k)',
+    ),
     # sums with the signs of their terms, a product with a negative operand
     ("-A^2", "-A^{2}", "-A^(2)"),
     ("A * -k", r"A \cdot \mathopen{}\left(-k\right)", "A dot (-k)"),

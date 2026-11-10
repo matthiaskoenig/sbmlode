@@ -404,6 +404,30 @@ def test_unsupported_section(fmt: str) -> None:
     assert f"algebraic rule {code[fmt]}" in document
 
 
+@pytest.mark.parametrize("fmt", sorted(SUFFIXES))
+def test_distrib_function_is_typeset_and_listed(fmt: str) -> None:
+    """A random initial value is typeset by its distrib function and listed."""
+    doc: libsbml.SBMLDocument = libsbml.readSBMLFromString(
+        model_sbml("x = 1; var y; y' = -x * y")
+    )
+    doc.enablePackage(libsbml.DistribExtension.getXmlnsL3V1V1(), "distrib", True)
+    model: libsbml.Model = doc.getModel()
+    assignment: libsbml.InitialAssignment = model.createInitialAssignment()
+    assignment.setSymbol("y")
+    assignment.setMath(libsbml.parseL3FormulaWithModel("uniform(0, x)", model))
+    system = OdeSystem.from_sbml(doc)
+    assert system.unsupported == (("distrib function", "y"),)
+    document = system.render(fmt)
+    typeset = {
+        "typst": 'op("uniform")(0, x)',
+        "latex": r"\operatorname{uniform}\mathopen{}\left(0, x\right)",
+        "markdown": r"\operatorname{uniform}\mathopen{}\left(0, x\right)",
+    }
+    assert typeset[fmt] in document
+    code = {"typst": "`y`", "latex": r"\texttt{y}", "markdown": "`y`"}
+    assert f"distrib function {code[fmt]}" in document
+
+
 def test_events_section() -> None:
     """An event shows its trigger, delay, priority, flags and assignments."""
     document = render("events", "latex")
