@@ -2,6 +2,13 @@
 
 What changed in every version of sbmlode, the newest first. The notes of a version are the text of its [release on GitHub](https://github.com/matthiaskoenig/sbmlode/releases), where the source of that version is archived.
 
+## 0.3.2
+
+sbmlode 0.3.2 writes the documents of a model with a function of the distrib package. A document lists the constructs the ODE system does not express in a section of its own, but its printers could not typeset the math of a distrib function, so the document of such a model failed with an `UnsupportedMathError`, e.g. a random initial value `uniform(0, 1)`.
+
+### Fixes
+- the LaTeX, typst and markdown documents (and `OdeSystem.typeset`) typeset the twelve functions of the distrib package as an upright operator with their name in SBML and their arguments, `\operatorname{uniform}(0, 1)` in LaTeX and markdown, `op("uniform")(0, 1)` in typst, a truncated distribution with its bounds after the parameters, `normal(mean, sd, min, max)`; the function stays in `OdeSystem.unsupported` and in the section of the unsupported constructs, a numerical format still refuses it
+
 ## 0.3.1
 
 sbmlode 0.3.1 is a security release of its development tooling: the uv with which the lock, the tests and the release are made no longer trusts the emSign root CA whose intermediate keys were compromised. The package and the code it writes are unchanged.

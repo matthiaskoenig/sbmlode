@@ -82,7 +82,7 @@ The analysis follows the semantics of SBML level 3 version 2 as libroadrunner im
 | algebraic rules | unsupported | listed |
 | `delay()` | unsupported | listed |
 | fast reactions | unsupported | listed |
-| distrib functions, e.g. `normal(mean, sd)` | unsupported | listed |
+| distrib functions, e.g. `normal(mean, sd)` | unsupported | typeset as `normal(mean, sd)` and listed |
 | `rateOf` of an assigned variable or of an expression | unsupported | listed |
 | an event trigger without a continuous root function | unsupported | listed |
 

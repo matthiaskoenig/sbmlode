@@ -15,7 +15,7 @@ from typing import ClassVar
 import libsbml
 
 from sbmlode.printers.base import Precedence, Printed
-from sbmlode.printers.document import DocumentPrinter
+from sbmlode.printers.document import DISTRIB_FUNCTIONS, DocumentPrinter
 
 
 class LatexPrinter(DocumentPrinter):
@@ -51,6 +51,10 @@ class LatexPrinter(DocumentPrinter):
         libsbml.AST_FUNCTION_SINH: r"\sinh",
         libsbml.AST_FUNCTION_TAN: r"\tan",
         libsbml.AST_FUNCTION_TANH: r"\tanh",
+        **{
+            ast_type: rf"\operatorname{{{name}}}"
+            for ast_type, name in DISTRIB_FUNCTIONS.items()
+        },
     }
     DELIMITED: ClassVar[Mapping[int, tuple[str, str]]] = {
         libsbml.AST_FUNCTION_ABS: (r"\mathopen{}\left| ", r" \right|"),

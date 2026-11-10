@@ -19,6 +19,10 @@ not as a program does:
 - the operands of a logical operator are in parentheses unless they are a relation
   (except for ⊕), a negation, an atom or a call, so that the reader needs no
   precedence of the logical operators, `(a ∧ b) ∨ c`, `(a > 1) ⊕ b`.
+- a function of the distrib package, which draws a random number, is an upright
+  operator with its name in SBML and its arguments, `uniform(0, 1)`,
+  `normal(μ, σ, min, max)`, so that the parameters of the distribution are read
+  in the order of the specification.
 
 `print_lines` breaks a long sum into lines of a given number of terms, for an
 equation of several lines.
@@ -37,6 +41,22 @@ from sbmlode.printers.base import (
     SymbolMap,
     Term,
 )
+
+DISTRIB_FUNCTIONS: dict[int, str] = {
+    libsbml.AST_DISTRIB_FUNCTION_NORMAL: "normal",
+    libsbml.AST_DISTRIB_FUNCTION_UNIFORM: "uniform",
+    libsbml.AST_DISTRIB_FUNCTION_BERNOULLI: "bernoulli",
+    libsbml.AST_DISTRIB_FUNCTION_BINOMIAL: "binomial",
+    libsbml.AST_DISTRIB_FUNCTION_CAUCHY: "cauchy",
+    libsbml.AST_DISTRIB_FUNCTION_CHISQUARE: "chisquare",
+    libsbml.AST_DISTRIB_FUNCTION_EXPONENTIAL: "exponential",
+    libsbml.AST_DISTRIB_FUNCTION_GAMMA: "gamma",
+    libsbml.AST_DISTRIB_FUNCTION_LAPLACE: "laplace",
+    libsbml.AST_DISTRIB_FUNCTION_LOGNORMAL: "lognormal",
+    libsbml.AST_DISTRIB_FUNCTION_POISSON: "poisson",
+    libsbml.AST_DISTRIB_FUNCTION_RAYLEIGH: "rayleigh",
+}
+"""The name of each function of the distrib package, as SBML writes it."""
 
 
 class DocumentPrinter(MathPrinter):

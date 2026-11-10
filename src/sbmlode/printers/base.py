@@ -171,6 +171,20 @@ _FUNCTION_ARITIES: dict[int, tuple[int, int | None]] = {
     libsbml.AST_FUNCTION_REM: (2, 2),
     libsbml.AST_FUNCTION_QUOTIENT: (2, 2),
     libsbml.AST_FUNCTION_DELAY: (2, 2),
+    # the distrib functions, with the optional truncation `min, max` after the
+    # parameters of the distribution, e.g. `normal(mean, sd, min, max)`
+    libsbml.AST_DISTRIB_FUNCTION_NORMAL: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_UNIFORM: (2, 2),
+    libsbml.AST_DISTRIB_FUNCTION_BERNOULLI: (1, 1),
+    libsbml.AST_DISTRIB_FUNCTION_BINOMIAL: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_CAUCHY: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_CHISQUARE: (1, 3),
+    libsbml.AST_DISTRIB_FUNCTION_EXPONENTIAL: (1, 3),
+    libsbml.AST_DISTRIB_FUNCTION_GAMMA: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_LAPLACE: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_LOGNORMAL: (2, 4),
+    libsbml.AST_DISTRIB_FUNCTION_POISSON: (1, 3),
+    libsbml.AST_DISTRIB_FUNCTION_RAYLEIGH: (1, 3),
 }
 
 _RELATIONS = frozenset(

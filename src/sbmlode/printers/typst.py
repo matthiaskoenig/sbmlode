@@ -16,7 +16,7 @@ from typing import ClassVar
 import libsbml
 
 from sbmlode.printers.base import Precedence, Printed
-from sbmlode.printers.document import DocumentPrinter
+from sbmlode.printers.document import DISTRIB_FUNCTIONS, DocumentPrinter
 
 
 class TypstPrinter(DocumentPrinter):
@@ -52,6 +52,7 @@ class TypstPrinter(DocumentPrinter):
         libsbml.AST_FUNCTION_SINH: "sinh",
         libsbml.AST_FUNCTION_TAN: "tan",
         libsbml.AST_FUNCTION_TANH: "tanh",
+        **{ast_type: f'op("{name}")' for ast_type, name in DISTRIB_FUNCTIONS.items()},
     }
     DELIMITED: ClassVar[Mapping[int, tuple[str, str]]] = {
         libsbml.AST_FUNCTION_ABS: ("abs(", ")"),
