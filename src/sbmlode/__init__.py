@@ -22,7 +22,7 @@ python, julia and R code, and typst, LaTeX and markdown documents
 """
 
 # the version comes first, the modules below read it when they render
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 from sbmlode.formats import (
     FORMATS,
