@@ -15,7 +15,7 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.23550486
     description: the doi of version 0.3.1
-version: "0.3.1"
+version: "0.3.2"
 date-released: "2026-10-22"
 doi: "10.5281/zenodo.23179199"
 license: MIT
