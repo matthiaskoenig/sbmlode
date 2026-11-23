@@ -2,6 +2,7 @@
 
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,8 @@ import pytest
 from ode_helpers import edit_sbml, model_sbml
 from resources import COMP_ICG_BODY, DEMO_SBML, MODELS_DIR
 
+from sbmlode import FORMATS
+from sbmlode.astutil import MAX_DEPTH, UnsupportedMathError, depth
 from sbmlode.dependencies import names, order
 from sbmlode.events import trigger_root
 from sbmlode.printers import PythonPrinter
@@ -1182,3 +1185,67 @@ def _add_initial(model: libsbml.Model, symbol: str, formula_text: str) -> None:
     assignment: libsbml.InitialAssignment = model.createInitialAssignment()
     assignment.setSymbol(symbol)
     assignment.setMath(libsbml.parseL3Formula(formula_text))
+
+
+# --- wide and deep math ---------------------------------------------------------------
+
+#: the terms of the wide sum of the tests, past the depth a recursive walk reads
+WIDE = 1200
+
+
+def _set_rule(variable: str, formula_text: str) -> Callable[[libsbml.Model], None]:
+    """Set the math of the assignment rule of a variable."""
+
+    def edit(model: libsbml.Model) -> None:
+        rule: libsbml.AssignmentRule = model.getAssignmentRuleByVariable(variable)
+        rule.setMath(parse(formula_text))
+
+    return edit
+
+
+@pytest.fixture(scope="module")
+def wide_sum_system() -> OdeSystem:
+    """The system of a model whose assignment rule sums many terms."""
+    sbml = edit_sbml(
+        model_sbml("""
+            p = 1; total := 0
+            compartment c = 1; species S in c = 1
+            J: S -> ; total * S
+        """),
+        _set_rule("total", " + ".join(["p"] * WIDE)),
+    )
+    # libsbml writes the flat sum of the AST as a flat n-ary `plus` of the document
+    # and reads it back as a chain of binary nodes, math as deep as it has terms
+    document = libsbml.readSBMLFromString(sbml)
+    assert depth(document.getModel().getRule(0).getMath()) == WIDE
+    return OdeSystem.from_sbml(sbml)
+
+
+def test_wide_sum_is_analysed(wide_sum_system: OdeSystem) -> None:
+    """A model whose rule sums many terms is analysed, see issue 26."""
+    assert math_of(wide_sum_system.assignments)["total"] == (
+        " + ".join(["p"] * WIDE),
+        "assignment_rule",
+    )
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS))
+def test_wide_sum_is_rendered(fmt: str, wide_sum_system: OdeSystem) -> None:
+    """Every format of a model whose rule sums many terms is written."""
+    rendered = wide_sum_system.render(fmt)
+    assert "total" in rendered
+    # the whole sum is written, in a code format once per function which uses it
+    assert rendered.count("+") >= WIDE - 1
+
+
+def test_size_rate_of_math_which_is_too_deep() -> None:
+    """The rate of a size whose rule is too deeply nested names the compartment."""
+    levels = MAX_DEPTH + 1
+    sbml = edit_sbml(
+        model_sbml("x = 1; x' = 0.1; compartment V; V := x; species S in V = 1"),
+        _set_rule("V", "-" * (levels - 1) + "x"),
+    )
+    with pytest.raises(
+        UnsupportedMathError, match=f"The math of 'V' is nested {levels} levels"
+    ):
+        OdeSystem.from_sbml(sbml)

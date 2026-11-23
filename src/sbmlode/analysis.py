@@ -14,6 +14,7 @@ import libsbml
 
 from sbmlode.astutil import (
     TIME,
+    check_depth,
     derivative,
     drop_zero_terms,
     is_number,
@@ -165,19 +166,27 @@ def _plain_text(notes: libsbml.XMLNode) -> str:
             paragraphs.append(paragraph)
         texts.clear()
 
-    def visit(node: libsbml.XMLNode) -> None:
-        if node.isText():
-            texts.extend((_EDGE, node.getCharacters(), _EDGE))
-            return
-        block = node.getName() in _BLOCKS
-        if block:
-            flush()
-        for k in range(node.getNumChildren()):
-            visit(node.getChild(k))
-        if block:
-            flush()
-        elif node.getName() in _CELLS:
-            texts.append(" ")
+    def visit(root: libsbml.XMLNode) -> None:
+        # the XHTML is walked with a stack, an element once before and once after
+        # its children, so that notes of any nesting are read
+        pending: list[tuple[libsbml.XMLNode, bool]] = [(root, False)]
+        while pending:
+            current, after = pending.pop()
+            if current.isText():
+                texts.extend((_EDGE, current.getCharacters(), _EDGE))
+                continue
+            block = current.getName() in _BLOCKS
+            if after:
+                if block:
+                    flush()
+                elif current.getName() in _CELLS:
+                    texts.append(" ")
+                continue
+            if block:
+                flush()
+            pending.append((current, True))
+            count = current.getNumChildren()
+            pending.extend((current.getChild(k), False) for k in reversed(range(count)))
 
     visit(notes)
     flush()
@@ -903,6 +912,8 @@ class _Analysis:
 
         Raises:
             ValueError: if the rates depend on each other in a cycle
+            UnsupportedMathError: if the math is nested deeper than the rules of
+                differentiation read (`check_depth`), naming the element
         """
         if sid in stack:
             raise ValueError(
@@ -927,6 +938,9 @@ class _Analysis:
         libsbml.SBMLTransforms.replaceFD(
             expanded, self.model.getListOfFunctionDefinitions()
         )
+        # math which is too deep to differentiate is refused here, where the element
+        # it belongs to is known, before the rules of differentiation read it
+        check_depth(expanded, element)
         by_time = derivative(expanded, TIME)
         if by_time is None:
             return None

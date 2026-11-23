@@ -6,7 +6,11 @@ import libsbml
 import pytest
 
 from sbmlode.astutil import (
+    MAX_DEPTH,
     TIME,
+    UnsupportedMathError,
+    check_depth,
+    depth,
     derivative,
     drop_zero_terms,
     is_number,
@@ -16,6 +20,7 @@ from sbmlode.astutil import (
     signed_sum,
     walk,
 )
+from sbmlode.events import trigger_root
 
 
 def parse(text: str) -> libsbml.ASTNode:
@@ -218,3 +223,90 @@ def test_derivative_of_unsupported_math(text: str) -> None:
 def test_derivative_of_unsupported_math_without_the_variable() -> None:
     """The derivative of a call of a function definition is unknown, even without x."""
     assert derivative(parse("f(y) + x"), "x") is None
+
+
+# --- wide and deep math ---------------------------------------------------------------
+
+#: the operands of the wide sums and products of the tests, past the depth a
+#: recursive walk reads; libsbml reads the flat n-ary sum of a MathML document as a
+#: chain of binary nodes, so this is the depth of their math as well
+WIDE = 2000
+
+
+def chain(operator: str, operands: int) -> libsbml.ASTNode:
+    """Math of a flat n-ary operator of MathML, which libsbml reads as a chain."""
+    ast = libsbml.readMathMLFromString(
+        f'<math xmlns="http://www.w3.org/1998/Math/MathML"><apply><{operator}/>'
+        f"{'<ci>a</ci>' * operands}</apply></math>"
+    )
+    assert ast is not None
+    assert ast.getNumChildren() == 2, "libsbml no longer reads a chain"
+    assert depth(ast) == operands
+    return ast
+
+
+def test_depth() -> None:
+    """The depth of math is the longest path from it down to a leaf."""
+    assert depth(parse("x")) == 1
+    assert depth(parse("x + 1")) == 2
+    assert depth(parse("sin(x + 1)")) == 3
+    assert depth(parse("x + sin(sin(x))")) == 4
+
+
+def test_walk_of_a_wide_sum() -> None:
+    """Every node of a sum of many terms is visited, however deep it is."""
+    assert sum(1 for _ in walk(chain("plus", WIDE))) == 2 * WIDE - 1
+
+
+def test_negated_of_a_long_product() -> None:
+    """A long product is negated on its first factor, without recursion."""
+    negation = negated(chain("times", WIDE))
+    assert formula(negation) == " * ".join(["-a", *["a"] * (WIDE - 1)])
+
+
+def test_drop_zero_terms_of_a_wide_sum() -> None:
+    """The zero terms of a wide sum are dropped, however deep the sum is."""
+    ast = libsbml.readMathMLFromString(
+        '<math xmlns="http://www.w3.org/1998/Math/MathML"><apply><plus/>'
+        f"{'<ci>a</ci><cn> 0 </cn>' * (WIDE // 2)}</apply></math>"
+    )
+    assert ast is not None
+    assert depth(ast) == WIDE
+    assert formula(drop_zero_terms(ast)) == " + ".join(["a"] * (WIDE // 2))
+
+
+def test_check_depth_names_the_element() -> None:
+    """The check of the depth names the element of the math and its depth."""
+    levels = MAX_DEPTH + 1
+    check_depth(parse("x + sin(y)"), "V")
+    with pytest.raises(
+        UnsupportedMathError, match=f"The math of 'V' is nested {levels} levels"
+    ):
+        check_depth(parse("-" * (levels - 1) + "x"), "V")
+
+
+def test_derivative_of_the_deepest_math() -> None:
+    """Math of as many levels as the walks read is differentiated."""
+    rate = derivative(parse("-" * (MAX_DEPTH - 1) + "x"), "x")
+    assert rate is not None
+    assert formula(rate) in {"1", "-1"}
+
+
+def test_derivative_of_math_which_is_too_deep() -> None:
+    """Math of more levels is refused with its depth, never a `RecursionError`."""
+    levels = MAX_DEPTH + 1
+    ast = parse("-" * (levels - 1) + "x")
+    assert depth(ast) == levels
+    with pytest.raises(
+        UnsupportedMathError, match=f"nested {levels} levels deep.*{MAX_DEPTH} levels"
+    ):
+        derivative(ast, "x")
+
+
+def test_trigger_root_of_math_which_is_too_deep() -> None:
+    """A trigger of too many levels is refused as the derivative of a math is."""
+    levels = MAX_DEPTH + 1
+    trigger = parse("x > " + "-" * (levels - 2) + "y")
+    assert depth(trigger) == levels
+    with pytest.raises(UnsupportedMathError, match="levels deep"):
+        trigger_root(trigger)

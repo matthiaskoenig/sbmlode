@@ -50,19 +50,30 @@ can write every sum with the signs of its terms and break a long sum into lines.
 Identifiers come only from the `symbols` mapping, which holds the expression of
 every name and of every function definition; an identifier without a mapping raises,
 so an id of the model is never written raw.
+
+libsbml reads the flat n-ary operators of a MathML document as chains of binary
+nodes, so `<apply><plus/>` with 1,000 `<ci>` children is math 1,000 levels deep whose
+root has two children. The engine therefore walks a chain of sums, differences,
+products and quotients with a stack of its own (`_print_chain`), as it walks the
+terms of a sum (`_terms`), and recurses only into the operands of such a chain, each
+as deep as it nests itself. Every other construct is printed recursively, a few
+frames of the interpreter per level, and math which is nested deeper than
+`astutil.MAX_DEPTH` is refused with an `UnsupportedMathError` which names its depth
+rather than read until the interpreter raises a `RecursionError`.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import IntEnum
 from itertools import pairwise
 from typing import ClassVar, NamedTuple
 
 import libsbml
 
+from sbmlode.astutil import MAX_DEPTH, UnsupportedMathError, depth
 from sbmlode.text import check_sid
 
 SymbolMap = Mapping[str, str]
@@ -104,33 +115,46 @@ class Term(NamedTuple):
     printed: Printed
 
 
-class UnsupportedMathError(NotImplementedError):
-    """Math which a printer cannot write.
+class _TooDeep(Exception):
+    """Math which is nested deeper than `MAX_DEPTH`, raised by the traversal.
 
-    Raised by the engine with a message which names the math and the printer, for a
-    construct the dialect cannot express and for an identifier without a symbol.
+    The entry points of the engine turn it into an `UnsupportedMathError` which names
+    the depth of the whole math. It is no `NotImplementedError`, so that the traversal
+    does not read it as a construct a dialect cannot express.
     """
 
 
-@dataclass(frozen=True)
-class _Context:
+class _Context(NamedTuple):
     """The symbols and the place of the math being printed.
+
+    A tuple, since the traversal makes one per level of the math.
 
     Attributes:
         symbols: expression of each identifier
         condition: the math is used as a condition, not as a number
+        depth: the levels of the math above the one being printed, the levels of
+            recursion the traversal has spent on it
     """
 
     symbols: SymbolMap
     condition: bool
+    depth: int = 0
 
     def as_number(self) -> _Context:
         """The context of an operand which is a number."""
-        return replace(self, condition=False) if self.condition else self
+        if not self.condition:
+            return self
+        return _Context(self.symbols, False, self.depth)
 
     def as_condition(self) -> _Context:
         """The context of an operand which is a condition."""
-        return self if self.condition else replace(self, condition=True)
+        if self.condition:
+            return self
+        return _Context(self.symbols, True, self.depth)
+
+    def deeper(self) -> _Context:
+        """The context one level further down the math."""
+        return _Context(self.symbols, self.condition, self.depth + 1)
 
 
 # functions which are the reciprocal of a function, sec(x) = 1/cos(x)
@@ -213,6 +237,18 @@ _CONDITIONS = (
     }
 )
 
+# the operators whose chains the engine walks with a stack, see `_chain_operands`:
+# libsbml reads a flat n-ary sum or product of a MathML document as a chain of binary
+# nodes, so the depth of such math grows with the number of its terms
+_CHAINS = frozenset(
+    {
+        libsbml.AST_PLUS,
+        libsbml.AST_MINUS,
+        libsbml.AST_TIMES,
+        libsbml.AST_DIVIDE,
+    }
+)
+
 
 def _is_number(ast: libsbml.ASTNode, value: float) -> bool:
     """Check that the math is the given number, written as an integer or a real."""
@@ -273,6 +309,21 @@ def _product(factors: Sequence[libsbml.ASTNode]) -> libsbml.ASTNode:
     for factor in factors:
         product.addChild(factor.deepCopy())
     return product
+
+
+@dataclass
+class _Chain:
+    """A node of a chain of operators whose operands are being printed.
+
+    Attributes:
+        ast: the node of the chain
+        operands: its operands, the children of the node
+        printed: the operands which are printed, in their order
+    """
+
+    ast: libsbml.ASTNode
+    operands: Sequence[libsbml.ASTNode]
+    printed: list[Printed]
 
 
 def _negated(ast: libsbml.ASTNode) -> libsbml.ASTNode:
@@ -354,10 +405,14 @@ class MathPrinter:
             the expression
 
         Raises:
-            UnsupportedMathError: for an identifier without an entry in `symbols` and
-                for a construct the dialect cannot express
+            UnsupportedMathError: for an identifier without an entry in `symbols`, for
+                a construct the dialect cannot express and for math which is nested
+                deeper than `MAX_DEPTH`
         """
-        return self._print(ast, _Context(symbols=symbols, condition=False)).code
+        try:
+            return self._print(ast, _Context(symbols=symbols, condition=False)).code
+        except _TooDeep:
+            raise self._too_deep(ast) from None
 
     def print_condition(self, ast: libsbml.ASTNode, symbols: SymbolMap) -> str:
         """Print math which is used as a condition, e.g. the trigger of an event.
@@ -370,10 +425,14 @@ class MathPrinter:
             the expression, a boolean of the dialect
 
         Raises:
-            UnsupportedMathError: for an identifier without an entry in `symbols` and
-                for a construct the dialect cannot express
+            UnsupportedMathError: for an identifier without an entry in `symbols`, for
+                a construct the dialect cannot express and for math which is nested
+                deeper than `MAX_DEPTH`
         """
-        return self._print(ast, _Context(symbols=symbols, condition=True)).code
+        try:
+            return self._print(ast, _Context(symbols=symbols, condition=True)).code
+        except _TooDeep:
+            raise self._too_deep(ast) from None
 
     def terms(self, ast: libsbml.ASTNode, symbols: SymbolMap) -> list[Term]:
         """Print the terms of math which is used as a number and is a sum.
@@ -393,10 +452,14 @@ class MathPrinter:
             the terms, in their order
 
         Raises:
-            UnsupportedMathError: for an identifier without an entry in `symbols` and
-                for a construct the dialect cannot express
+            UnsupportedMathError: for an identifier without an entry in `symbols`, for
+                a construct the dialect cannot express and for math which is nested
+                deeper than `MAX_DEPTH`
         """
-        return self._terms(ast, _Context(symbols=symbols, condition=False))
+        try:
+            return self._terms(ast, _Context(symbols=symbols, condition=False))
+        except _TooDeep:
+            raise self._too_deep(ast) from None
 
     # --- building blocks of the hooks ---------------------------------------------
 
@@ -798,7 +861,7 @@ class MathPrinter:
     # --- traversal ----------------------------------------------------------------
 
     def _print(self, ast: libsbml.ASTNode, ctx: _Context) -> Printed:
-        """Print math in a context.
+        """Print math in a context, one level deeper than the context it is given.
 
         Args:
             ast: the math
@@ -810,23 +873,40 @@ class MathPrinter:
         Raises:
             UnsupportedMathError: for an identifier without a symbol and for a
                 construct the dialect cannot express
+            _TooDeep: if the math is nested deeper than `MAX_DEPTH`
         """
+        if ctx.depth >= MAX_DEPTH:
+            raise _TooDeep
         try:
-            printed = self._dispatch(ast, ctx)
+            printed = self._dispatch(ast, ctx.deeper())
         except UnsupportedMathError:
             raise
         except NotImplementedError as error:
-            formula = libsbml.formulaToL3String(ast)
-            message = (
-                f"The math '{formula}' is not supported by the {self.name} printer."
-            )
-            if str(error):
-                message = f"{message} {error}"
-            raise UnsupportedMathError(message) from None
+            raise self._unsupported(ast, error) from None
         if ctx.condition and ast.getType() not in _CONDITIONS:
             # a number used as a condition, e.g. an argument of a function definition
             return self.number_to_bool(printed, _constant(ast))
         return printed
+
+    def _unsupported(
+        self, ast: libsbml.ASTNode, error: NotImplementedError
+    ) -> UnsupportedMathError:
+        """The error of math the dialect cannot express, which names it."""
+        formula = libsbml.formulaToL3String(ast)
+        message = f"The math '{formula}' is not supported by the {self.name} printer."
+        if str(error):
+            message = f"{message} {error}"
+        return UnsupportedMathError(message)
+
+    def _too_deep(self, ast: libsbml.ASTNode) -> UnsupportedMathError:
+        """The error of math which is nested deeper than the printer reads."""
+        return UnsupportedMathError(
+            f"The math is nested {depth(ast)} levels deep, more than the {MAX_DEPTH} "
+            f"levels the {self.name} printer writes. A sum or a product of many terms "
+            f"is no such math; this one nests other constructs within each other. "
+            f"Write the inner expressions as assignment rules of their own and refer "
+            f"to them by their id."
+        )
 
     def _dispatch(self, ast: libsbml.ASTNode, ctx: _Context) -> Printed:
         """Print math by the type of its node, see `_print`."""
@@ -853,6 +933,14 @@ class MathPrinter:
         if ast_type in self.FUNCTIONS:
             self._check_arity(children, *_FUNCTION_ARITIES.get(ast_type, (1, 1)))
             return self.call(self.FUNCTIONS[ast_type], self._numbers(children, ctx))
+        if ast_type in _CHAINS:
+            operands = self._chain_operands(ast, children)
+            if operands is not None and any(
+                operand.getType() in _CHAINS for operand in operands
+            ):
+                # a chain of the operators, which is as deep as a flat sum of a
+                # MathML document is long, is walked with a stack, not by recursion
+                return self._print_chain(ast, operands, ctx)
 
         match ast_type:
             # numbers and identifiers
@@ -870,26 +958,18 @@ class MathPrinter:
 
             # arithmetic
             case libsbml.AST_PLUS | libsbml.AST_TIMES:
-                is_sum = ast_type == libsbml.AST_PLUS
                 if not children:
-                    return self._integer(0 if is_sum else 1)
+                    return self._integer(0 if ast_type == libsbml.AST_PLUS else 1)
                 if len(children) == 1:
                     return self._print(children[0], ctx.as_number())
-                operator, precedence = (
-                    (self.PLUS, Precedence.SUM)
-                    if is_sum
-                    else (self.TIMES, Precedence.PRODUCT)
-                )
-                return self.infix(self._numbers(children, ctx), operator, precedence)
+                return self._operation(ast_type, self._numbers(children, ctx))
             case libsbml.AST_MINUS:
-                operands = self._numbers(children, ctx)
-                if len(operands) == 1:
-                    return self.negate(operands[0])
-                self._check_arity(operands, 2, None)
-                return self.infix(operands, self.MINUS, Precedence.SUM)
+                printed = self._numbers(children, ctx)
+                if len(printed) == 1:
+                    return self.negate(printed[0])
+                return self._operation(ast_type, printed)
             case libsbml.AST_DIVIDE:
-                numerator, denominator = self._numbers(children, ctx, 2)
-                return self.divide(numerator, denominator)
+                return self._operation(ast_type, self._numbers(children, ctx, 2))
             case libsbml.AST_POWER | libsbml.AST_FUNCTION_POWER:
                 base, exponent = self._numbers(children, ctx, 2)
                 return self.power(base, exponent)
@@ -982,6 +1062,118 @@ class MathPrinter:
 
         raise NotImplementedError
 
+    # --- the chains of the operators ----------------------------------------------
+
+    def _operation(self, ast_type: int, operands: Sequence[Printed]) -> Printed:
+        """The printed sum, difference, product or quotient of printed operands.
+
+        The one place where the engine writes an operator of `_CHAINS`, for the
+        traversal of a single node (`_dispatch`) and for the chains it walks with a
+        stack (`_print_chain`).
+
+        Args:
+            ast_type: the libsbml type of the operation, one of `_CHAINS`
+            operands: the printed operands, at least two
+
+        Returns:
+            the printed operation
+
+        Raises:
+            NotImplementedError: if the number of the operands is not the number of
+                the operands of the operation
+        """
+        if ast_type == libsbml.AST_PLUS:
+            return self.infix(operands, self.PLUS, Precedence.SUM)
+        if ast_type == libsbml.AST_TIMES:
+            return self.infix(operands, self.TIMES, Precedence.PRODUCT)
+        if ast_type == libsbml.AST_MINUS:
+            self._check_arity(operands, 2, None)
+            return self.infix(operands, self.MINUS, Precedence.SUM)
+        self._check_arity(operands, 2, 2)
+        numerator, denominator = operands
+        return self.divide(numerator, denominator)
+
+    def _chain_operands(
+        self, ast: libsbml.ASTNode, children: Sequence[libsbml.ASTNode] | None = None
+    ) -> Sequence[libsbml.ASTNode] | None:
+        """The operands of math the engine prints by `_operation`, else `None`.
+
+        A sum, a difference, a product or a quotient of at least two operands which
+        `_dispatch` prints from its printed operands alone, so that a chain of them
+        can be walked with a stack; `None` for math of any other shape, e.g. a sum
+        the dialect writes from its signed terms (`SIGNED_SUMS`) or an operator which
+        is a function of the dialect.
+
+        Args:
+            ast: the math
+            children: its children, if the caller has read them already
+
+        Returns:
+            the operands, `None` for math which is no such operation
+        """
+        ast_type: int = ast.getType()
+        if (
+            ast_type not in _CHAINS
+            or ast_type in self.CONSTANTS
+            or ast_type in self.DELIMITED
+            or ast_type in self.FUNCTIONS
+            or (self.SIGNED_SUMS and _is_signed(ast))
+        ):
+            return None
+        if children is None:
+            count = ast.getNumChildren()
+            children = [ast.getChild(k) for k in range(count)]
+        if len(children) < 2 or (ast_type == libsbml.AST_DIVIDE and len(children) != 2):
+            return None
+        return children
+
+    def _print_chain(
+        self, ast: libsbml.ASTNode, operands: Sequence[libsbml.ASTNode], ctx: _Context
+    ) -> Printed:
+        """Print a chain of the operators of `_CHAINS` with a stack.
+
+        The operands of every node of the chain are printed in the order the
+        recursion printed them, from the left and the chain below an operand first,
+        and every node is printed from them by `_operation` as `_dispatch` prints a
+        single one. An operand which is not part of the chain is printed recursively,
+        in the context of the whole chain, so that it is as deep as it nests itself
+        and a chain of any length costs one level.
+
+        Args:
+            ast: the math, the node of the chain which is printed
+            operands: its operands, see `_chain_operands`
+            ctx: the symbols and the place of the math
+
+        Returns:
+            the printed math
+
+        Raises:
+            UnsupportedMathError: for an identifier without a symbol and for a
+                construct the dialect cannot express
+        """
+        number = ctx.as_number()
+        chain = [_Chain(ast, operands, [])]
+        while True:
+            current = chain[-1]
+            if len(current.printed) < len(current.operands):
+                operand = current.operands[len(current.printed)]
+                below = self._chain_operands(operand)
+                if below is None:
+                    current.printed.append(self._print(operand, number))
+                else:
+                    chain.append(_Chain(operand, below, []))
+                continue
+            try:
+                printed = self._operation(current.ast.getType(), current.printed)
+            except UnsupportedMathError:
+                raise
+            except NotImplementedError as error:
+                raise self._unsupported(current.ast, error) from None
+            chain.pop()
+            if not chain:
+                return printed
+            chain[-1].printed.append(printed)
+
     # --- helpers of the traversal -------------------------------------------------
 
     def _integer(self, value: int) -> Printed:
@@ -993,48 +1185,60 @@ class MathPrinter:
         return self.literal(self.number(1.0))
 
     def _terms(self, ast: libsbml.ASTNode, ctx: _Context) -> list[Term]:
-        """The terms of math used as a number, see `terms`."""
-        terms: list[Term] = []
-        self._collect_terms(ast, False, ctx, terms)
-        return terms
+        """The terms of math used as a number with their signs, see `terms`.
 
-    def _collect_terms(
-        self, ast: libsbml.ASTNode, negative: bool, ctx: _Context, terms: list[Term]
-    ) -> None:
-        """Append the terms of a sum with their sign, see `terms`.
+        The sums and the differences of the math are walked with a stack, so that
+        the terms of a sum of any length are collected without recursion; a term
+        itself is printed recursively.
 
         Args:
             ast: the math
-            negative: the math has a minus in the sum
             ctx: the symbols and the place of the math
-            terms: the terms, to which the terms of the math are appended
+
+        Returns:
+            the terms, in their order
         """
-        ast_type: int = ast.getType()
-        children: list[libsbml.ASTNode] = [
-            ast.getChild(k) for k in range(ast.getNumChildren())
-        ]
-        if ast_type == libsbml.AST_PLUS and children:
-            for child in children:
-                self._collect_terms(child, negative, ctx, terms)
-        elif ast_type == libsbml.AST_MINUS and children:
-            first, *subtrahends = children
-            if not subtrahends:
-                # unary minus
-                self._collect_terms(first, not negative, ctx, terms)
+        terms: list[Term] = []
+        # the math whose terms are left to collect and the sign each one has in the
+        # sum, in reverse order: the stack is read from its end, so that the terms
+        # are collected from the left
+        pending: list[tuple[libsbml.ASTNode, bool]] = [(ast, False)]
+        # the products the walk builds: libsbml deletes the children of a node with
+        # it, and a child of such a product is read after it is taken off the stack,
+        # so they are kept until every term is printed (the recursion kept each one
+        # in the frame which read its factors)
+        built: list[libsbml.ASTNode] = []
+        while pending:
+            current, negative = pending.pop()
+            ast_type: int = current.getType()
+            children: list[libsbml.ASTNode] = [
+                current.getChild(k) for k in range(current.getNumChildren())
+            ]
+            if ast_type == libsbml.AST_PLUS and children:
+                pending.extend((child, negative) for child in reversed(children))
+            elif ast_type == libsbml.AST_MINUS and children:
+                first, *subtrahends = children
+                if not subtrahends:
+                    # unary minus
+                    pending.append((first, not negative))
+                else:
+                    pending.extend(
+                        (child, not negative) for child in reversed(subtrahends)
+                    )
+                    pending.append((first, negative))
+            elif _is_negative_number(current):
+                terms.append(Term(not negative, self._print(_negated(current), ctx)))
+            elif ast_type == libsbml.AST_TIMES and _is_signed(current):
+                # the sign of the first factor is the sign of the product, -1 * b is -b
+                first, *others = children
+                factor = first.getChild(0) if _is_negation(first) else _negated(first)
+                factors = others if _is_number(factor, 1) else [factor, *others]
+                product = _product(factors)
+                built.append(product)
+                pending.append((product, not negative))
             else:
-                self._collect_terms(first, negative, ctx, terms)
-                for child in subtrahends:
-                    self._collect_terms(child, not negative, ctx, terms)
-        elif _is_negative_number(ast):
-            terms.append(Term(not negative, self._print(_negated(ast), ctx)))
-        elif ast_type == libsbml.AST_TIMES and _is_signed(ast):
-            # the sign of the first factor is the sign of the product, -1 * b is -b
-            first, *others = children
-            factor = first.getChild(0) if _is_negation(first) else _negated(first)
-            factors = others if _is_number(factor, 1) else [factor, *others]
-            self._collect_terms(_product(factors), not negative, ctx, terms)
-        else:
-            terms.append(Term(negative, self._print(ast, ctx.as_number())))
+                terms.append(Term(negative, self._print(current, ctx.as_number())))
+        return terms
 
     def _truth(self, value: bool, ctx: _Context) -> Printed:
         """Printed boolean constant of the `CONSTANTS` in its context."""
