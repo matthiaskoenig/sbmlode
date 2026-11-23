@@ -1,6 +1,7 @@
 """Test the math helpers of the ODE export."""
 
 import math
+import time
 
 import libsbml
 import pytest
@@ -310,3 +311,52 @@ def test_trigger_root_of_math_which_is_too_deep() -> None:
     assert depth(trigger) == levels
     with pytest.raises(UnsupportedMathError, match="levels deep"):
         trigger_root(trigger)
+
+
+@pytest.mark.parametrize(
+    ("formula_text", "expected"),
+    [
+        ("a + 0 + b", "a + b"),
+        ("a + -b", "a - b"),
+        ("a + -(b + c)", "a - (b + c)"),
+        ("a + -(b - c)", "a + (c - b)"),
+        ("a + -(2 * b)", "a + -2 * b"),
+        ("a + -(b / c)", "a + -b / c"),
+        ("a + -5", "a + -5"),
+        ("-(-(a + b))", "a + b"),
+        ("-(-(-(a + b)))", "-(a + b)"),
+        ("-(-(2 * a))", "2 * a"),
+        ("-(-(a - b))", "a - b"),
+        ("a - -(b - -(c - -d))", "a + (b + (c + d))"),
+        ("-(0 - a)", "a"),
+        ("sin(-(a + b))", "sin(-(a + b))"),
+    ],
+)
+def test_drop_zero_terms_writes_the_signs(formula_text: str, expected: str) -> None:
+    """Which sign the rewriting of a sum writes, where a term of it is a negation.
+
+    The rewriting carries the sign of a term it does not write out, so these are the
+    shapes a sign carried too far would be seen in.
+    """
+    assert formula(drop_zero_terms(parse(formula_text))) == expected
+
+
+def test_drop_zero_terms_of_negations_of_a_wide_sum() -> None:
+    """A negation within a negation costs nothing, the sum of it is not copied again.
+
+    The negation of a term used to be written at every level and read back out of it
+    by a copy of the term at the level above, which copied the whole sum per level
+    and made the rewriting of this shape quadratic.
+    """
+    levels = 1500
+    ast = parse("-" * levels + "(" + " + ".join(["a"] * levels) + " + 0)")
+    # the negations nest, the sum of the innermost one is as wide as they are deep
+    assert depth(ast) >= levels
+    assert ast.getType() == libsbml.AST_MINUS
+    start = time.perf_counter()
+    rewritten = drop_zero_terms(ast)
+    seconds = time.perf_counter() - start
+    assert formula(rewritten) == " + ".join(["a"] * levels)
+    # a copy of the sum per level took seconds for this shape, and minutes for a
+    # wider one; the rewriting takes a hundredth of the budget
+    assert seconds < 1.0

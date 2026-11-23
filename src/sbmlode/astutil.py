@@ -18,7 +18,10 @@ nodes: `<apply><plus/>` with 1,000 `<ci>` children is math 1,000 levels deep who
 root has two children. A walk of the math is therefore written with a stack of its
 own (`walk`, `negated`, `drop_zero_terms`), not with the stack of the interpreter,
 and `check_depth` refuses math which is nested deeper than `MAX_DEPTH` before the
-walks which stay recursive (`derivative`) read it.
+walks which stay recursive (`derivative`) read it. A walk of such a chain also has
+to read and copy the math of every node once, not once per level, or the chain costs
+the square of its length in time and in memory: `negated` copies the factors of a
+level and `drop_zero_terms` the children it does not rewrite itself.
 """
 
 import math
@@ -173,10 +176,13 @@ def negated(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     """The negation of the math, which it takes ownership of.
 
     A number changes its sign, `-x` is `x`, `a - b` is `b - a`, a product or quotient
-    negates its first factor, `-2 * J`, `-f * J`, anything else is `-x`. The chain of
-    the products and quotients which carry the sign on their first factor is walked
-    with a stack, so that a long product is negated without recursion.
+    negates its first factor, `-2 * J`, `-f * J`, anything else is `-x`
+    (`_negation_wraps`). The chain of the products and quotients which carry the sign
+    on their first factor is walked with a stack, so that a long product is negated
+    without recursion.
     """
+    if _negation_wraps(ast):
+        return node(libsbml.AST_MINUS, ast)
     # the products and quotients whose first factor carries the sign, and the copies
     # of their factors after the first; the sign is put on the first factor of the
     # innermost one, which is the only one of them the negation keeps
@@ -196,6 +202,31 @@ def negated(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     for ast_type, others in reversed(chain):
         negation = node(ast_type, negation, *others)
     return negation
+
+
+def _negation_wraps(ast: libsbml.ASTNode) -> bool:
+    """Whether `negated` writes the negation of the math as a minus in front of it.
+
+    A number changes its sign, a negation and a difference are rewritten and a
+    product or a quotient negates its first factor; the negation of every other math
+    is the math itself with a minus in front of it, which is the one case a node
+    above can take the minus off again without reading the math (`drop_zero_terms`).
+
+    Args:
+        ast: the math
+
+    Returns:
+        whether its negation is `-x`
+    """
+    ast_type = ast.getType()
+    if ast_type in _NUMBERS:
+        return False
+    count = ast.getNumChildren()
+    if ast_type == libsbml.AST_MINUS:
+        return count not in {1, 2}
+    if ast_type in {libsbml.AST_TIMES, libsbml.AST_DIVIDE}:
+        return count <= 1
+    return True
 
 
 def _negated_term(ast: libsbml.ASTNode) -> libsbml.ASTNode:
@@ -251,15 +282,35 @@ class _Rewriting(NamedTuple):
     """A node whose children are being rewritten by `drop_zero_terms`.
 
     Attributes:
-        ast: the node, which the rewriting owns
-        left: the copies of the children which are left to rewrite, in reverse order,
-            since the stack reads them from its end
-        rewritten: the children which are rewritten, in their order
+        ast: the node of the math being rewritten
+        left: its children which are left to rewrite, in reverse order, since the
+            stack reads them from its end; they are the children themselves, which
+            the math owns, not copies of them
+        rewritten: the rewriting of the children which are rewritten, in their order
     """
 
     ast: libsbml.ASTNode
     left: list[libsbml.ASTNode]
-    rewritten: list[libsbml.ASTNode]
+    rewritten: list["_Rewritten"]
+
+
+class _Rewritten(NamedTuple):
+    """The rewriting of a node of a math, see `drop_zero_terms`.
+
+    Attributes:
+        sign: the sign of the math, `-1` for the negation of it, which the node
+            above puts on it: a sum takes it as the sign of a term, every other node
+            negates the math (`_signed`)
+        ast: the new math, `None` for a node which stays where it is in the math
+            being rewritten, with the new math of its children in their places
+    """
+
+    sign: int
+    ast: libsbml.ASTNode | None
+
+
+#: the rewriting of a node which stays where it is in the math
+_IN_PLACE = _Rewritten(1, None)
 
 
 def drop_zero_terms(ast: libsbml.ASTNode) -> libsbml.ASTNode:
@@ -269,6 +320,12 @@ def drop_zero_terms(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     a constant was replaced by 0. The math is walked with a stack of its own, a node
     after its children, so that a long sum is rewritten without recursion.
 
+    A node which is no sum stays where it is and only takes the new math of a child
+    into the place of it, and the sum which replaces a sum takes over the new math of
+    the children which are rewritten and a copy of each child which is not, so that
+    no node of the math is copied twice and a sum of n terms is rewritten in the time
+    its n terms take.
+
     Args:
         ast: the math, which it takes ownership of
 
@@ -276,50 +333,76 @@ def drop_zero_terms(ast: libsbml.ASTNode) -> libsbml.ASTNode:
         the math without zero terms
     """
     # the nodes whose children are being rewritten, the deepest last
-    stack = [_Rewriting(ast, list(reversed(_children(ast))), [])]
+    stack = [_rewriting(ast)]
     while True:
         current = stack[-1]
         if current.left:
-            child = current.left.pop()
-            stack.append(_Rewriting(child, list(reversed(_children(child))), []))
+            stack.append(_rewriting(current.left.pop()))
             continue
         stack.pop()
         rewritten = _without_zero_terms(current.ast, current.rewritten)
         if not stack:
-            return rewritten
+            if rewritten.ast is None:
+                return current.ast
+            return _signed(rewritten.sign, rewritten.ast)
         stack[-1].rewritten.append(rewritten)
 
 
+def _rewriting(ast: libsbml.ASTNode) -> _Rewriting:
+    """The node whose children are to be rewritten, see `drop_zero_terms`."""
+    count = ast.getNumChildren()
+    return _Rewriting(ast, [ast.getChild(k) for k in reversed(range(count))], [])
+
+
+def _signed(sign: int, ast: libsbml.ASTNode) -> libsbml.ASTNode:
+    """The math, negated if the sign is negative, which it takes ownership of."""
+    return ast if sign > 0 else negated(ast)
+
+
 def _without_zero_terms(
-    ast: libsbml.ASTNode, children: list[libsbml.ASTNode]
-) -> libsbml.ASTNode:
-    """The node of a math whose children are rewritten, see `drop_zero_terms`.
+    ast: libsbml.ASTNode, rewritten: list[_Rewritten]
+) -> _Rewritten:
+    """The rewriting of a node whose children are rewritten, see `drop_zero_terms`.
 
     Args:
-        ast: the node, which it takes ownership of
-        children: the rewritten children, which it takes ownership of
+        ast: the node of the math being rewritten, which keeps its children
+        rewritten: the rewriting of each of its children
 
     Returns:
-        the node without the zero terms of its sum
+        the rewriting of the node: the node itself if it is no sum, else the sum of
+        the terms of it which are not the number 0
     """
     ast_type = ast.getType()
     signs: list[int] = []
-    if ast_type == libsbml.AST_PLUS and children:
-        signs = [1] * len(children)
-    elif ast_type == libsbml.AST_MINUS and len(children) in {1, 2}:
-        signs = [1, -1] if len(children) == 2 else [-1]
-    if signs:
-        terms = []
-        for sign, child in zip(signs, children, strict=True):
+    if ast_type == libsbml.AST_PLUS and rewritten:
+        signs = [1] * len(rewritten)
+    elif ast_type == libsbml.AST_MINUS and len(rewritten) in {1, 2}:
+        signs = [1, -1] if len(rewritten) == 2 else [-1]
+    if not signs:
+        # the node stays where it is, with the new math of a child in the place of it
+        for k, child in enumerate(rewritten):
+            if child.ast is not None:
+                ast.replaceChild(k, _signed(child.sign, child.ast), True)
+        return _IN_PLACE
+    terms: list[tuple[int, libsbml.ASTNode]] = []
+    for k, (sign, child) in enumerate(zip(signs, rewritten, strict=True)):
+        new = child.ast
+        if new is None:
+            # a child which is not rewritten is copied, the only copy it takes
+            original = ast.getChild(k)
+            if not is_number(original, 0.0):
+                terms.append((sign, original.deepCopy()))
+        elif not is_number(new, 0.0):
             # a negation is a negative term, `a + -b` is `a - b`
-            negation = child.getType() == libsbml.AST_MINUS
-            if negation and child.getNumChildren() == 1:
-                sign, child = -sign, child.getChild(0).deepCopy()
-            terms.append((sign, child))
-        return signed_sum(terms)
-    for k, child in enumerate(children):
-        ast.replaceChild(k, child, True)
-    return ast
+            terms.append((sign * child.sign, new))
+    if not terms:
+        return _Rewritten(1, number(0.0))
+    if len(terms) == 1 and terms[0][0] < 0 and _negation_wraps(terms[0][1]):
+        # the sum of a single negative term is the term with a minus in front of it,
+        # which the node above puts on it: it is answered with its sign, rather than
+        # negated here and read back there, which would copy the math of the term
+        return _Rewritten(-1, terms[0][1])
+    return _Rewritten(1, signed_sum(terms))
 
 
 # --- the derivative -------------------------------------------------------------------

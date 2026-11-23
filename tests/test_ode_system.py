@@ -1238,6 +1238,35 @@ def test_wide_sum_is_rendered(fmt: str, wide_sum_system: OdeSystem) -> None:
     assert rendered.count("+") >= WIDE - 1
 
 
+def test_wide_sum_with_a_rate_of_is_analysed() -> None:
+    """A rateOf of a constant among many terms is dropped, in the time the sum takes.
+
+    Dropping the term rewrites the whole sum (`drop_zero_terms`), which used to copy
+    the terms again at every level of the chain libsbml reads the sum as: that took
+    the square of the width in time and in memory, tens of seconds and 9 GB for this
+    width, where the model is analysed in a fraction of a second now. The
+    width is far above `WIDE`, so that the test is slow if the rewriting is.
+    """
+    terms = 4000
+    sbml = edit_sbml(
+        model_sbml("""
+            p = 1; total := 0
+            compartment c = 1; species S in c = 1
+            J: S -> ; total * S
+        """),
+        _set_rule("total", "rateOf(p) + " + " + ".join(["p"] * terms)),
+    )
+    start = time.perf_counter()
+    system = OdeSystem.from_sbml(sbml)
+    seconds = time.perf_counter() - start
+    # the rate of change of a constant is 0, and a term which is 0 is dropped
+    assert math_of(system.assignments)["total"] == (
+        " + ".join(["p"] * terms),
+        "assignment_rule",
+    )
+    assert seconds < 5.0
+
+
 def test_size_rate_of_math_which_is_too_deep() -> None:
     """The rate of a size whose rule is too deeply nested names the compartment."""
     levels = MAX_DEPTH + 1
