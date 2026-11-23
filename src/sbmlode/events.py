@@ -14,7 +14,7 @@ import itertools
 
 import libsbml
 
-from sbmlode.astutil import _NUMBERS, negated, node, number
+from sbmlode.astutil import _NUMBERS, check_depth, negated, node, number
 
 __all__ = ["trigger_root"]
 
@@ -41,6 +41,11 @@ def trigger_root(trigger: libsbml.ASTNode) -> libsbml.ASTNode:
     - `true` is `1`, `false` is `-1`, a number is true unless it is 0; `and()` is
       true, `or()` and `xor()` are false.
 
+    The operands of the logical operators are read recursively, a level of the
+    trigger per call, so a trigger of more than `MAX_DEPTH` levels is refused
+    (`check_depth`); libsbml reads a conjunction of many operands as a chain of
+    binary nodes.
+
     Args:
         trigger: the math of the trigger, which is not changed
 
@@ -52,7 +57,14 @@ def trigger_root(trigger: libsbml.ASTNode) -> libsbml.ASTNode:
             equality or inequality, which holds at a single point, or a boolean
             which is neither a relation, a logical operator nor a constant, e.g. a
             boolean variable or a `piecewise`
+        UnsupportedMathError: if the trigger is nested deeper than `MAX_DEPTH`
     """
+    check_depth(trigger)
+    return _root(trigger)
+
+
+def _root(trigger: libsbml.ASTNode) -> libsbml.ASTNode:
+    """The root function of a trigger whose depth is checked, see `trigger_root`."""
     ast_type = trigger.getType()
     operands = [trigger.getChild(k) for k in range(trigger.getNumChildren())]
     if ast_type in _GREATER or ast_type in _LESS:
@@ -72,16 +84,16 @@ def trigger_root(trigger: libsbml.ASTNode) -> libsbml.ASTNode:
     if ast_type == libsbml.AST_CONSTANT_FALSE:
         return number(-1.0)
     if ast_type == libsbml.AST_LOGICAL_AND:
-        roots = [trigger_root(operand) for operand in operands] or [number(1.0)]
+        roots = [_root(operand) for operand in operands] or [number(1.0)]
         return _extreme(libsbml.AST_FUNCTION_MIN, roots)
     if ast_type == libsbml.AST_LOGICAL_OR:
-        roots = [trigger_root(operand) for operand in operands] or [number(-1.0)]
+        roots = [_root(operand) for operand in operands] or [number(-1.0)]
         return _extreme(libsbml.AST_FUNCTION_MAX, roots)
     if ast_type == libsbml.AST_LOGICAL_NOT and len(operands) == 1:
-        return negated(trigger_root(operands[0]))
+        return negated(_root(operands[0]))
     if ast_type == libsbml.AST_LOGICAL_XOR:
         # xor(x, y) holds where exactly one holds, xor(x, y, z) is xor(xor(x, y), z)
-        roots = [trigger_root(operand) for operand in operands] or [number(-1.0)]
+        roots = [_root(operand) for operand in operands] or [number(-1.0)]
         root = roots[0]
         for other in roots[1:]:
             root = node(
@@ -96,7 +108,7 @@ def trigger_root(trigger: libsbml.ASTNode) -> libsbml.ASTNode:
         return root
     if ast_type == libsbml.AST_LOGICAL_IMPLIES and len(operands) == 2:
         x, y = operands
-        return node(libsbml.AST_FUNCTION_MAX, negated(trigger_root(x)), trigger_root(y))
+        return node(libsbml.AST_FUNCTION_MAX, negated(_root(x)), _root(y))
     raise NotImplementedError(
         f"The trigger '{libsbml.formulaToL3String(trigger)}' has no continuous root "
         f"function."

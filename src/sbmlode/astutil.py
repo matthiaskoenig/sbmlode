@@ -12,15 +12,27 @@ are the number 0 are dropped (`signed_sum`, `drop_zero_terms`).
 `derivative` differentiates a math symbolically, for the rate of a size given by an
 assignment rule (the chain rule of the analysis); its result is simplified the same
 way, without the factors 1 and the terms 0 of the rules of differentiation.
+
+libsbml reads the flat n-ary operators of a MathML document as chains of binary
+nodes: `<apply><plus/>` with 1,000 `<ci>` children is math 1,000 levels deep whose
+root has two children. A walk of the math is therefore written with a stack of its
+own (`walk`, `negated`, `drop_zero_terms`), not with the stack of the interpreter,
+and `check_depth` refuses math which is nested deeper than `MAX_DEPTH` before the
+walks which stay recursive (`derivative`) read it.
 """
 
 import math
 from collections.abc import Callable, Iterator, Sequence
+from typing import NamedTuple
 
 import libsbml
 
 __all__ = [
+    "MAX_DEPTH",
     "TIME",
+    "UnsupportedMathError",
+    "check_depth",
+    "depth",
     "derivative",
     "drop_zero_terms",
     "is_number",
@@ -37,6 +49,80 @@ __all__ = [
 _NUMBERS = frozenset(
     {libsbml.AST_INTEGER, libsbml.AST_REAL, libsbml.AST_REAL_E, libsbml.AST_RATIONAL}
 )
+
+
+class UnsupportedMathError(NotImplementedError):
+    """Math which this library cannot read or write.
+
+    Raised by the engine of the printers with a message which names the math and the
+    printer, for a construct a dialect cannot express and for an identifier without a
+    symbol, and by `check_depth` for math which is nested deeper than the recursive
+    walks of the library read.
+    """
+
+
+#: the levels of nesting the recursive walks of the library read, see `check_depth`
+#:
+#: A walk which recurses spends a few frames of the interpreter per level of the
+#: math, three in the printers (`_print`, `_dispatch` and the printing of an
+#: operand) and one in `derivative`, and CPython allows a thread 1,000 frames
+#: (`sys.getrecursionlimit()`) of which the caller has already spent some. Measured
+#: on CPython 3.15 from an empty stack, the printers read 330 levels of nested
+#: functions and 493 of nested piecewise, `derivative` 990 levels; the limit is a
+#: third of the smallest of them, so that math which passes it is written within
+#: a third of the frames of the interpreter, whatever the caller has spent and
+#: however the walks are written. The nesting of real math is far below it: the
+#: chains libsbml reads a flat n-ary sum or product of a document as are walked
+#: with a stack and cost one level (`printers.base`), and the other n-ary
+#: operators, `and`, `or`, `piecewise` and the relations, it keeps flat.
+MAX_DEPTH = 100
+
+
+def depth(ast: libsbml.ASTNode) -> int:
+    """The levels of nesting of math, measured without recursion.
+
+    Args:
+        ast: the math
+
+    Returns:
+        the number of the nodes of the longest path from the math down to a leaf,
+        `1` for a number or a name
+    """
+    levels = 0
+    level = [ast]
+    while level:
+        levels += 1
+        below: list[libsbml.ASTNode] = []
+        for current in level:
+            below.extend(current.getChild(k) for k in range(current.getNumChildren()))
+        level = below
+    return levels
+
+
+def check_depth(ast: libsbml.ASTNode, element: str = "") -> None:
+    """Check that math is not nested deeper than the recursive walks read.
+
+    In front of a walk of the math which recurses per level, so that math which is
+    nested too deeply is refused with a message of its own rather than read until
+    the stack of the interpreter is exhausted.
+
+    Args:
+        ast: the math
+        element: the id of the element the math belongs to, named in the message
+
+    Raises:
+        UnsupportedMathError: if the math is nested deeper than `MAX_DEPTH`
+    """
+    levels = depth(ast)
+    if levels <= MAX_DEPTH:
+        return
+    subject = f"The math of '{element}'" if element else "The math"
+    raise UnsupportedMathError(
+        f"{subject} is nested {levels} levels deep, more than the {MAX_DEPTH} levels "
+        f"sbmlode reads. Math nested this deeply is written by a tool rather than by "
+        f"hand: write the inner expressions as assignment rules of their own and "
+        f"refer to them by their id."
+    )
 
 
 def node(ast_type: int, *children: libsbml.ASTNode) -> libsbml.ASTNode:
@@ -87,18 +173,41 @@ def negated(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     """The negation of the math, which it takes ownership of.
 
     A number changes its sign, `-x` is `x`, `a - b` is `b - a`, a product or quotient
-    negates its first factor, `-2 * J`, `-f * J`, anything else is `-x`.
+    negates its first factor, `-2 * J`, `-f * J`, anything else is `-x`. The chain of
+    the products and quotients which carry the sign on their first factor is walked
+    with a stack, so that a long product is negated without recursion.
     """
+    # the products and quotients whose first factor carries the sign, and the copies
+    # of their factors after the first; the sign is put on the first factor of the
+    # innermost one, which is the only one of them the negation keeps
+    chain: list[tuple[int, list[libsbml.ASTNode]]] = []
+    current = ast
+    while current.getType() in {libsbml.AST_TIMES, libsbml.AST_DIVIDE}:
+        count = current.getNumChildren()
+        if count <= 1:
+            break
+        others = [current.getChild(k).deepCopy() for k in range(1, count)]
+        chain.append((current.getType(), others))
+        current = current.getChild(0)
+    if chain:
+        # the innermost first factor is part of the math, the sign goes on a copy
+        current = current.deepCopy()
+    negation = _negated_term(current)
+    for ast_type, others in reversed(chain):
+        negation = node(ast_type, negation, *others)
+    return negation
+
+
+def _negated_term(ast: libsbml.ASTNode) -> libsbml.ASTNode:
+    """The negation of math which is no product or quotient, see `negated`."""
     ast_type = ast.getType()
-    children = _children(ast)
     if ast_type in _NUMBERS:
         return number(-ast.getValue())
+    children = _children(ast)
     if ast_type == libsbml.AST_MINUS and len(children) == 1:
         return children[0]
     if ast_type == libsbml.AST_MINUS and len(children) == 2:
         return node(libsbml.AST_MINUS, children[1], children[0])
-    if ast_type in {libsbml.AST_TIMES, libsbml.AST_DIVIDE} and len(children) > 1:
-        return node(ast_type, negated(children[0]), *children[1:])
     return node(libsbml.AST_MINUS, ast)
 
 
@@ -138,11 +247,27 @@ def signed_sum(terms: Sequence[tuple[int, libsbml.ASTNode]]) -> libsbml.ASTNode:
     return total
 
 
+class _Rewriting(NamedTuple):
+    """A node whose children are being rewritten by `drop_zero_terms`.
+
+    Attributes:
+        ast: the node, which the rewriting owns
+        left: the copies of the children which are left to rewrite, in reverse order,
+            since the stack reads them from its end
+        rewritten: the children which are rewritten, in their order
+    """
+
+    ast: libsbml.ASTNode
+    left: list[libsbml.ASTNode]
+    rewritten: list[libsbml.ASTNode]
+
+
 def drop_zero_terms(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     """The math with the terms of its sums which are the number 0 dropped.
 
     Every sum and difference is rewritten by `signed_sum`, e.g. after a `rateOf` of
-    a constant was replaced by 0.
+    a constant was replaced by 0. The math is walked with a stack of its own, a node
+    after its children, so that a long sum is rewritten without recursion.
 
     Args:
         ast: the math, which it takes ownership of
@@ -150,8 +275,34 @@ def drop_zero_terms(ast: libsbml.ASTNode) -> libsbml.ASTNode:
     Returns:
         the math without zero terms
     """
+    # the nodes whose children are being rewritten, the deepest last
+    stack = [_Rewriting(ast, list(reversed(_children(ast))), [])]
+    while True:
+        current = stack[-1]
+        if current.left:
+            child = current.left.pop()
+            stack.append(_Rewriting(child, list(reversed(_children(child))), []))
+            continue
+        stack.pop()
+        rewritten = _without_zero_terms(current.ast, current.rewritten)
+        if not stack:
+            return rewritten
+        stack[-1].rewritten.append(rewritten)
+
+
+def _without_zero_terms(
+    ast: libsbml.ASTNode, children: list[libsbml.ASTNode]
+) -> libsbml.ASTNode:
+    """The node of a math whose children are rewritten, see `drop_zero_terms`.
+
+    Args:
+        ast: the node, which it takes ownership of
+        children: the rewritten children, which it takes ownership of
+
+    Returns:
+        the node without the zero terms of its sum
+    """
     ast_type = ast.getType()
-    children = [drop_zero_terms(child) for child in _children(ast)]
     signs: list[int] = []
     if ast_type == libsbml.AST_PLUS and children:
         signs = [1] * len(children)
@@ -330,13 +481,25 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
     of a package and any other function is unknown, whether the variable is in its
     arguments or not, and so is the derivative of a math which holds one.
 
+    The rules of differentiation are read recursively, a level of the math per call,
+    so the math is refused above `MAX_DEPTH` levels (`check_depth`).
+
     Args:
         ast: the math, which is not changed
         variable: an id, or `TIME` for the csymbol time
 
     Returns:
         a new math, `None` if the derivative is unknown
+
+    Raises:
+        UnsupportedMathError: if the math is nested deeper than `MAX_DEPTH`
     """
+    check_depth(ast)
+    return _derivative(ast, variable)
+
+
+def _derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
+    """The derivative of math whose depth is checked, see `derivative`."""
     ast_type = ast.getType()
     if ast_type == libsbml.AST_NAME:
         return number(1.0 if ast.getName() == variable else 0.0)
@@ -347,7 +510,7 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
     count = ast.getNumChildren()
     if ast_type == libsbml.AST_FUNCTION_PIECEWISE:
         return _piecewise(ast, variable)
-    rates = [derivative(ast.getChild(k), variable) for k in range(count)]
+    rates = [_derivative(ast.getChild(k), variable) for k in range(count)]
     if any(rate is None for rate in rates):
         return None
     d = [rate for rate in rates if rate is not None]
@@ -408,13 +571,16 @@ def derivative(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
 
 
 def _piecewise(ast: libsbml.ASTNode, variable: str) -> libsbml.ASTNode | None:
-    """The derivative of a piecewise: of each piece, under its condition."""
+    """The derivative of a piecewise: of each piece, under its condition.
+
+    The depth of the math is checked by `derivative`, see `_derivative`.
+    """
     count = ast.getNumChildren()
     children = []
     for k in range(count):
         # the values are the children 0, 2, ... and the last of an odd count
         if k % 2 == 0:
-            rate = derivative(ast.getChild(k), variable)
+            rate = _derivative(ast.getChild(k), variable)
             if rate is None:
                 return None
             children.append(rate)

@@ -88,6 +88,8 @@ The analysis follows the semantics of SBML level 3 version 2 as libroadrunner im
 
 The fbc and layout packages describe no dynamics; their content is not part of the ODE system.
 
+The math of a model is read at most `sbmlode.astutil.MAX_DEPTH` (100) levels deep. libsbml reads the flat n-ary sum or product of a document as a chain of binary nodes, so a sum of 1,000 terms is math 1,000 levels deep; such a chain is walked with a stack and costs a single level, as do the terms of a sum, so a sum or a product of any number of terms is written. Math which nests other constructs within each other more deeply than that is refused with an `UnsupportedMathError` which names the depth of the math, and the element it belongs to where the analysis knows it.
+
 The analysis resolves the following semantics once, so that every format only prints what the system holds:
 
 - **States** are the species which are neither constant nor boundary nor set by an assignment rule and take part in a reaction, and every compartment, species, parameter and species reference with a rate rule. Every other quantity is a constant or an assigned value; a constant which an event changes is constant between the events.

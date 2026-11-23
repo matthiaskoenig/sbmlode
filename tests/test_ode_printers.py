@@ -22,6 +22,7 @@ from ode_helpers import (
     toolchain_missing,
 )
 
+from sbmlode.astutil import MAX_DEPTH, UnsupportedMathError, depth
 from sbmlode.printers import PRINTERS
 from sbmlode.printers.base import (
     MathPrinter,
@@ -1615,6 +1616,200 @@ def test_print_lines_width(printer: type[DocumentPrinter]) -> None:
     """A line holds at least one term."""
     with pytest.raises(ValueError, match="width"):
         printer().print_lines(parse("a + b"), LINE_SYMBOLS, 0)
+
+
+# --- wide and deep math -------------------------------------------------------------
+
+#: the operands of the wide sums and products of the tests: libsbml reads a flat
+#: n-ary operator of a MathML document as a chain of binary nodes, so this is the
+#: depth of their math as well, far beyond the depth a recursive printer reads
+WIDE = 2000
+
+#: every printer with the symbols of its dialect
+DIALECT_SYMBOLS = [
+    (PythonPrinter, SYMBOLS),
+    (JaxPrinter, SYMBOLS),
+    (JuliaPrinter, SYMBOLS),
+    (RPrinter, SYMBOLS),
+    (LatexPrinter, LATEX_SYMBOLS),
+    (TypstPrinter, TYPST_SYMBOLS),
+]
+
+
+def chain(operator: str, operands: int, operand: str = "<ci>A</ci>") -> libsbml.ASTNode:
+    """Math of a flat n-ary operator of MathML, which libsbml reads as a chain.
+
+    Args:
+        operator: the name of the operator element, `plus` or `times`
+        operands: the number of the operands
+        operand: the MathML of each operand
+
+    Returns:
+        the math, a chain of binary nodes which is as deep as it has operands
+    """
+    math = mathml(f"<apply><{operator}/>{operand * operands}</apply>")
+    assert math.getNumChildren() == 2, "libsbml no longer reads a chain"
+    assert depth(math) >= operands
+    return math
+
+
+def nested_chain(operator: str, operands: int) -> libsbml.ASTNode:
+    """Math of an infix chain of an operator, `a - b - c`, which nests to the left.
+
+    libsbml reads a difference and a quotient of more than two operands as the
+    nested binary operations the infix syntax writes, while it keeps the n-ary
+    `minus` and `divide` of a MathML document.
+
+    Args:
+        operator: the infix operator, `-` or `/`
+        operands: the number of the operands
+
+    Returns:
+        the math, as deep as it has operands
+    """
+    math = parse(f" {operator} ".join(["A"] * operands))
+    assert math.getNumChildren() == 2
+    assert depth(math) == operands
+    return math
+
+
+def nest(levels: int) -> libsbml.ASTNode:
+    """Math of nested calls, of the given depth, which no printer flattens."""
+    calls = levels - 1
+    math = parse("sin(" * calls + "A" + ")" * calls)
+    assert depth(math) == levels
+    return math
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_sum(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A sum of many terms is printed, however deeply libsbml nests it."""
+    assert printer().print(chain("plus", WIDE), symbols) == printer.PLUS.join(
+        ["A"] * WIDE
+    )
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_product(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A product of many factors is printed, however deeply libsbml nests it."""
+    assert printer().print(chain("times", WIDE), symbols) == printer.TIMES.join(
+        ["A"] * WIDE
+    )
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_difference(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A difference of many subtrahends is printed, `a - b - c`."""
+    assert printer().print(nested_chain("-", WIDE), symbols) == printer.MINUS.join(
+        ["A"] * WIDE
+    )
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_quotient(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A quotient of many divisors is printed, as a fraction of a fraction."""
+    printed = printer().print(nested_chain("/", WIDE), symbols)
+    assert printed.count("A") == WIDE
+
+
+def test_wide_quotient_of_code() -> None:
+    """The code of a long quotient is one division after the other."""
+    assert PythonPrinter().print(nested_chain("/", WIDE), SYMBOLS) == " / ".join(
+        ["A"] * WIDE
+    )
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_mixed_chain(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A chain of the operators mixed is printed, `a - b + c * d / e`."""
+    math = parse(" - ".join(["A + A * A / A"] * (WIDE // 4)))
+    assert depth(math) >= WIDE // 4
+    assert printer().print(math, symbols).count("A") == WIDE
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_wide_sum_of_calls(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """A term of a wide sum is printed as the printer prints it alone."""
+    math = chain("plus", WIDE, "<apply><sin/><ci>A</ci></apply>")
+    term = printer().print(parse("sin(A)"), symbols)
+    assert printer().print(math, symbols) == printer.PLUS.join([term] * WIDE)
+
+
+def test_wide_sum_terms() -> None:
+    """The terms of a wide sum are collected without recursion."""
+    terms = LatexPrinter().terms(chain("plus", WIDE), LATEX_SYMBOLS)
+    assert terms == [Term(negative=False, printed=Printed("A", Precedence.ATOM))] * WIDE
+
+
+def test_wide_difference_terms() -> None:
+    """Every subtrahend of a wide difference is a term with a minus."""
+    terms = LatexPrinter().terms(nested_chain("-", WIDE), LATEX_SYMBOLS)
+    assert terms[0] == Term(negative=False, printed=Printed("A", Precedence.ATOM))
+    negative = Term(negative=True, printed=Printed("A", Precedence.ATOM))
+    assert terms[1:] == [negative] * (WIDE - 1)
+
+
+@pytest.mark.parametrize(
+    ("printer", "symbols"),
+    [(LatexPrinter, LATEX_SYMBOLS), (TypstPrinter, TYPST_SYMBOLS)],
+)
+def test_wide_sum_lines(
+    printer: type[DocumentPrinter], symbols: dict[str, str]
+) -> None:
+    """A wide sum is broken into the lines of a document."""
+    lines = printer().print_lines(chain("plus", WIDE), symbols)
+    assert len(lines) == WIDE // 4
+    assert lines[0] == "A + A + A + A"
+    assert lines[-1] == "+ A + A + A + A"
+
+
+def test_wide_sum_of_deep_terms() -> None:
+    """A term of a wide sum is read as deeply as it nests itself, no deeper."""
+    deep = "sin(" * (MAX_DEPTH - 2) + "A" + ")" * (MAX_DEPTH - 2)
+    math = parse(" + ".join([deep] * 100))
+    assert depth(math) == MAX_DEPTH
+    assert PythonPrinter().print(math, SYMBOLS).count("A") == 100
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_deepest_math(printer: type[MathPrinter], symbols: dict[str, str]) -> None:
+    """Math of as many levels as the printers read is printed."""
+    assert printer().print(nest(MAX_DEPTH), symbols).count("A") == 1
+
+
+@pytest.mark.parametrize(("printer", "symbols"), DIALECT_SYMBOLS)
+def test_math_which_is_too_deep(
+    printer: type[MathPrinter], symbols: dict[str, str]
+) -> None:
+    """Math of more levels is refused with its depth, never a `RecursionError`."""
+    levels = MAX_DEPTH + 1
+    with pytest.raises(
+        UnsupportedMathError,
+        match=f"nested {levels} levels deep.*{MAX_DEPTH} levels the {printer.name}",
+    ):
+        printer().print(nest(levels), symbols)
+
+
+def test_condition_which_is_too_deep() -> None:
+    """A condition of too many levels is refused as a number is."""
+    with pytest.raises(UnsupportedMathError, match="levels deep"):
+        PythonPrinter().print_condition(nest(MAX_DEPTH + 1), SYMBOLS)
+
+
+def test_terms_of_math_which_is_too_deep() -> None:
+    """A term of too many levels is refused as a number is."""
+    levels = MAX_DEPTH + 1
+    math = parse(f"A + {'sin(' * levels}A{')' * levels}")
+    with pytest.raises(UnsupportedMathError, match="levels deep"):
+        LatexPrinter().terms(math, LATEX_SYMBOLS)
+
+
+def test_lines_of_math_which_is_too_deep() -> None:
+    """A term of too many levels is refused in the lines of a document."""
+    levels = MAX_DEPTH + 1
+    math = parse(f"A + {'sin(' * levels}A{')' * levels}")
+    with pytest.raises(UnsupportedMathError, match="levels deep"):
+        LatexPrinter().print_lines(math, LATEX_SYMBOLS)
 
 
 # --- compilation of the documents ---------------------------------------------------
