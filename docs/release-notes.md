@@ -2,6 +2,22 @@
 
 What changed in every version of sbmlode, the newest first. The notes of a version are the text of its [release on GitHub](https://github.com/matthiaskoenig/sbmlode/releases), where the source of that version is archived.
 
+## 0.3.3
+
+sbmlode 0.3.3 reads and writes the wide math of a model. libsbml reads the flat n-ary sum of a MathML document as a chain of binary nodes, so an assignment rule which sums 1,200 parameters is math 1,200 levels deep: the documents of such a model failed with a `RecursionError`, which the user was shown as "maximum recursion depth exceeded", and dropping the zero terms of such a sum copied the square of its length in nodes. The walks of the printers and of `astutil` carry a stack of their own now, a chain of 20,000 terms renders in every format in under a second, and math which nests genuinely deeper than the printers can read is refused with a message which says so.
+
+### Fixes
+
+- **The printers walk a chain without recursion.** The engine of the printers walks the chains of sums, differences, products and quotients, and the terms of a sum, with a stack of its own, so a sum or a product of any width is written while an operand still costs the levels it nests itself. Both paths end in the same `_operation`, the one place which writes those operators, so the text of a chain is the one the recursion wrote. The walks of `astutil` (`negated`, `drop_zero_terms`) and the notes of the analysis are iterative as well.
+
+- **Dropping the zero terms of a sum copies a node at most once.** The terms which are 0 after a `rateOf` of a constant was replaced by it were dropped by copying the children of every node of the chain, and every copy was held until the level above was built: a sum of 5,000 terms took 23 seconds and 14 GB, and one of 20,000 terms was killed by the kernel before it answered. A node which is no sum stays where it is and only puts the new math of a rewritten child in the place of that child, and a sum is replaced by the signed sum of its terms, which copies only a child which was not rewritten. The analysis of a sum of 20,000 terms with a `rateOf` among them takes 1.2 seconds and 23 MB, where the analysis of the same model without the `rateOf` takes 0.8 seconds. Nothing is detached from the original math and the ownership of the nodes is as it was.
+
+- **The negation of a single term is not written and read back.** A rewriting carries the sign of the math it answers, so the node above folds it into the sign of its own term or negates the math once. The sign is deferred only where `negated` writes a negation as a minus in front of the math, which `_negation_wraps` answers and `negated` itself asks, so the rule has one description and the text of every other sum is the one it was.
+
+- **Math which is too deep is refused and no longer raises a `RecursionError`.** What stays recursive is the printing of the constructs which nest genuinely, the rules of differentiation and the root function of a trigger; their depth is checked against `astutil.MAX_DEPTH` before they read the math. The limit is 100 levels, a third of the 330 levels the printers read on CPython 3.15, measured. Math which nests deeper is refused with an `UnsupportedMathError` which names the depth of the math, the element it belongs to where the analysis knows it, and what to do about it.
+
+- `UnsupportedMathError` moved to `astutil`, which the analysis and the printers share, and is re-exported where it was.
+
 ## 0.3.2
 
 sbmlode 0.3.2 writes the documents of a model with a function of the distrib package. A document lists the constructs the ODE system does not express in a section of its own, but its printers could not typeset the math of a distrib function, so the document of such a model failed with an `UnsupportedMathError`, e.g. a random initial value `uniform(0, 1)`.
